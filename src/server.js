@@ -25,6 +25,8 @@ import cashHandoverRoutes from "./routes/cashHandoverRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import backupRoutes from "./routes/backupRoutes.js";
 import nozzlemanDashboardRoutes from "./routes/nozzlemanDashboardRoutes.js";
+import User from './models/User.js';
+import bcrypt from 'bcryptjs';
 
 const app = express();
 
@@ -89,21 +91,31 @@ app.get("/api/health", (req, res) => {
 
 const createDefaultAdmin = async () => {
   try {
+    console.log('🔍 Checking for admin user...');
+    
     const adminExists = await User.findOne({ email: 'admin@gmail.com' });
+    console.log('Admin exists:', !!adminExists);
+    
     if (!adminExists) {
-      const hashedPassword = await bcrypt.hash('admin123', 10);
-      await User.create({
-        name: 'Admin User',
+      console.log('👤 Creating default admin user...');
+      const hashedPassword = await bcrypt.hash('admin123', 12);
+      
+      const adminUser = await User.create({
+        name: 'System Administrator',
         email: 'admin@gmail.com',
         password: hashedPassword,
         role: 'admin',
-        mobile: '1234567890',
+        mobile: '0000000000',
         isActive: true
       });
-      console.log('✅ Default admin user created');
+      
+      console.log('✅ Admin user created:', adminUser.email);
+    } else {
+      console.log('✅ Admin user already exists');
     }
   } catch (error) {
-    console.log('⚠️  Could not create admin user:', error.message);
+    console.error('❌ Error creating admin user:', error.message);
+    console.error('Full error:', error);
   }
 };
 
@@ -113,7 +125,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
-   createDefaultAdmin(); // Add this line
+  await createDefaultAdmin();
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
