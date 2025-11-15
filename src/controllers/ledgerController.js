@@ -1,5 +1,5 @@
 // controllers/ledgerController.js
-import Ledger from "../models/ledger.js";
+import Ledger from "../models/Ledger.js";
 import Customer from "../models/Customer.js";
 import asyncHandler from "express-async-handler";
 
