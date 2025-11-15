@@ -47,29 +47,7 @@ router.post('/setup-admin', asyncHandler(async (req, res) => {
   });
 }));
 
-// TEMPORARY: Add this route to reset admin password
-router.post('/reset-admin', asyncHandler(async (req, res) => {
-  const { newPassword } = req.body;
-  
-  // Find the admin user
-  const adminUser = await User.findOne({ email: "admin@gmail.com" });
-  if (!adminUser) {
-    return res.status(404).json({ error: 'Admin user not found' });
-  }
-  
-  // Reset password
-  adminUser.password = newPassword;
-  await adminUser.save();
-  
-  res.json({ 
-    success: true,
-    message: 'Admin password reset successfully',
-    credentials: {
-      email: "admin@gmail.com",
-      password: newPassword
-    }
-  });
-}));
+
 
 // Regular auth routes
 router.post("/register", register);
