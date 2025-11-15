@@ -1,19 +1,15 @@
 import express from "express";
+import asyncHandler from "express-async-handler"; // ADD THIS IMPORT
+import User from "../models/User.js"; // ADD THIS IMPORT
 import { 
   login, 
   register, 
   logout, 
-  checkInvitation ,
+  checkInvitation,
   registerNozzleman
 } from "../controllers/authController.js";
 
 const router = express.Router();
-
-router.post("/register", register);
-router.post("/register-nozzleman", registerNozzleman);
-router.post("/login", login);
-router.post("/logout", logout);
-router.get("/invitation/:token", checkInvitation);
 
 // TEMPORARY ROUTE - For first-time admin setup (remove after use)
 router.post('/setup-admin', asyncHandler(async (req, res) => {
@@ -50,5 +46,12 @@ router.post('/setup-admin', asyncHandler(async (req, res) => {
     }
   });
 }));
+
+// Regular auth routes
+router.post("/register", register);
+router.post("/register-nozzleman", registerNozzleman);
+router.post("/login", login);
+router.post("/logout", logout);
+router.get("/invitation/:token", checkInvitation);
 
 export default router;
