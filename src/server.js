@@ -23,17 +23,34 @@ import nozzlemanRoutes from "./routes/nozzlemanRoutes.js";
 import assignmentRoutes from "./routes/assignmentRoutes.js";
 import cashHandoverRoutes from "./routes/cashHandoverRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
-import backupRoutes from "./routes/backupRoutes.js"; // Make sure this import is correct
+import backupRoutes from "./routes/backupRoutes.js";
 import nozzlemanDashboardRoutes from "./routes/nozzlemanDashboardRoutes.js";
 
 const app = express();
 
-// CORS configuration
+// CORS configuration - UPDATED
 app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:8080", "http://127.0.0.1:5173"],
+  origin: [
+    "https://pumpmanager.netlify.app", // Your Netlify domain
+    "http://localhost:5173", 
+    "http://localhost:8080", 
+    "http://127.0.0.1:5173"
+  ],
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
 }));
+
+// Handle preflight requests explicitly
+app.options('*', cors());
+
+// Additional CORS headers
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  next();
+});
 
 app.use(express.json());
 app.use(cookieParser());
@@ -58,8 +75,9 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/nozzles", nozzleRoutes);
 app.use("/api/nozzlemen", nozzlemanRoutes); 
 app.use("/api/assignments", assignmentRoutes);
-app.use("/api/backups", backupRoutes); // FIXED: Use app.use()
+app.use("/api/backups", backupRoutes);
 app.use("/api/nozzleman", nozzlemanDashboardRoutes);
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.status(200).json({ 
@@ -78,6 +96,7 @@ connectDB().then(() => {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🌍 Allowed origins: https://pumpmanager.netlify.app, http://localhost:5173`);
     console.log(`💾 Backup system initialized - Daily backups at 2 AM`);
   });
 });
