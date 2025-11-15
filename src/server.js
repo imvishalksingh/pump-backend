@@ -115,7 +115,6 @@ const createDefaultAdmin = async () => {
     }
   } catch (error) {
     console.error('❌ Error creating admin user:', error.message);
-    console.error('Full error:', error);
   }
 };
 
@@ -124,7 +123,7 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
-connectDB().then(() => {
+connectDB().then(async () => {
   await createDefaultAdmin();
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
