@@ -87,12 +87,33 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+const createDefaultAdmin = async () => {
+  try {
+    const adminExists = await User.findOne({ email: 'admin@gmail.com' });
+    if (!adminExists) {
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await User.create({
+        name: 'Admin User',
+        email: 'admin@gmail.com',
+        password: hashedPassword,
+        role: 'admin',
+        mobile: '1234567890',
+        isActive: true
+      });
+      console.log('✅ Default admin user created');
+    }
+  } catch (error) {
+    console.log('⚠️  Could not create admin user:', error.message);
+  }
+};
+
 // Error handler
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
+   createDefaultAdmin(); // Add this line
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
