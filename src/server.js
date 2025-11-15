@@ -89,46 +89,16 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-const createDefaultAdmin = async () => {
-  try {
-    console.log('🔍 Checking for admin user...');
-    
-    const adminExists = await User.findOne({ email: 'admin@gmail.com' });
-    console.log('Admin exists:', !!adminExists);
-    
-    if (!adminExists) {
-      console.log('👤 Creating default admin user...');
-      const hashedPassword = await bcrypt.hash('admin123', 12);
-      
-      const adminUser = await User.create({
-        name: 'System Administrator',
-        email: 'admin@gmail.com',
-        password: hashedPassword,
-        role: 'admin',
-        mobile: '0000000000',
-        isActive: true
-      });
-      
-      console.log('✅ Admin user created:', adminUser.email);
-    } else {
-      console.log('✅ Admin user already exists');
-    }
-  } catch (error) {
-    console.error('❌ Error creating admin user:', error.message);
-  }
-};
 
 // Error handler
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
-connectDB().then(async () => {
-  await createDefaultAdmin();
+connectDB().then(() => {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🌍 Allowed origins: https://pumpmanager.netlify.app, http://localhost:5173`);
     console.log(`💾 Backup system initialized - Daily backups at 2 AM`);
   });
 });
