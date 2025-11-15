@@ -1,0 +1,396 @@
+{
+  "info": {
+    "name": "Nozzleman Management System APIs",
+    "description": "Complete API collection for Nozzleman registration, login, dashboard and shifts",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "nozzlemanProfileId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "🔐 AUTHENTICATION",
+      "item": [
+        {
+          "name": "1. Register Nozzleman",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Test Nozzleman\",\n    \"email\": \"nozzleman.test@example.com\",\n    \"password\": \"password123\",\n    \"mobile\": \"9876543210\",\n    \"shift\": \"Morning\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register-nozzleman",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register-nozzleman"]
+            },
+            "description": "Register a new nozzleman user"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Set environment variables",
+                  "pm.environment.set(\"token\", pm.response.json().token);",
+                  "pm.environment.set(\"nozzlemanProfileId\", pm.response.json().nozzlemanProfile._id);",
+                  "",
+                  "// Validate response",
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Response has user data\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('_id');",
+                  "    pm.expect(jsonData).to.have.property('name');",
+                  "    pm.expect(jsonData).to.have.property('email');",
+                  "    pm.expect(jsonData).to.have.property('role', 'nozzleman');",
+                  "    pm.expect(jsonData).to.have.property('nozzlemanProfile');",
+                  "});",
+                  "",
+                  "pm.test(\"Token is generated\", function () {",
+                  "    pm.expect(pm.response.json().token).to.not.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Login Nozzleman",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"nozzleman.test@example.com\",\n    \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login as nozzleman user"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Update token",
+                  "pm.environment.set(\"token\", pm.response.json().token);",
+                  "",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Login successful\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('token');",
+                  "    pm.expect(jsonData.role).to.equal('nozzleman');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "📊 DASHBOARD & SHIFTS",
+      "item": [
+        {
+          "name": "3. Get Nozzleman Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/nozzleman/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["nozzleman", "dashboard"]
+            },
+            "description": "Get nozzleman dashboard data"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Dashboard data structure\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('profile');",
+                  "    pm.expect(jsonData).to.have.property('currentAssignments');",
+                  "    pm.expect(jsonData).to.have.property('recentShifts');",
+                  "    pm.expect(jsonData).to.have.property('todayStats');",
+                  "});",
+                  "",
+                  "pm.test(\"Profile data is complete\", function () {",
+                  "    const profile = pm.response.json().profile;",
+                  "    pm.expect(profile).to.have.property('employeeId');",
+                  "    pm.expect(profile).to.have.property('name');",
+                  "    pm.expect(profile).to.have.property('shift');",
+                  "    pm.expect(profile).to.have.property('assignedNozzles');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Get Nozzleman Shifts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/nozzleman/shifts",
+              "host": ["{{baseUrl}}"],
+              "path": ["nozzleman", "shifts"]
+            },
+            "description": "Get all shifts for the logged-in nozzleman"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Returns shifts array\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🔒 AUTHORIZATION TESTS",
+      "item": [
+        {
+          "name": "5. Test - Access Nozzles (Should Work)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/nozzles",
+              "host": ["{{baseUrl}}"],
+              "path": ["nozzles"]
+            },
+            "description": "Test if nozzleman can access nozzles (should work)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Nozzle access allowed\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Test - Access All Nozzlemen (Should Fail)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/nozzlemen",
+              "host": ["{{baseUrl}}"],
+              "path": ["nozzlemen"]
+            },
+            "description": "Test authorization - nozzleman should NOT access all nozzlemen"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Nozzlemen access denied\", function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "❌ ERROR SCENARIOS",
+      "item": [
+        {
+          "name": "7. Invalid Registration (Missing Fields)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Incomplete Nozzleman\",\n    \"email\": \"incomplete@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register-nozzleman",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register-nozzleman"]
+            },
+            "description": "Test registration with missing required fields"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Registration fails with missing fields\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. Invalid Login Credentials",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"wrong@example.com\",\n    \"password\": \"wrongpassword\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Test login with invalid credentials"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Login fails with invalid credentials\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9. Access Without Token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/nozzleman/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["nozzleman", "dashboard"]
+            },
+            "description": "Test accessing protected route without authentication token"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Access denied without token\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

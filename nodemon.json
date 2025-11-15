@@ -1,0 +1,15 @@
+{
+  "ignore": [
+    "mongodb-backups/**/*",
+    "**/mongodb-backups/**",
+    "node_modules/**",
+    ".git/**"
+  ],
+  "watch": [
+    "src/",
+    "*.js",
+    "*.json"
+  ],
+  "ext": "js,json",
+  "exec": "node src/server.js"
+}
