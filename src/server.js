@@ -23,10 +23,14 @@ import nozzlemanRoutes from "./routes/nozzlemanRoutes.js";
 import assignmentRoutes from "./routes/assignmentRoutes.js";
 import cashHandoverRoutes from "./routes/cashHandoverRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
-import backupRoutes from "./routes/backupRoutes.js";
+import backupRoutes from "./routes/backupRoutes.js"; // Make sure this import is correct
 import nozzlemanDashboardRoutes from "./routes/nozzlemanDashboardRoutes.js";
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
+import path from "./models/User.js";
+import tankConfigRoutes from "./routes/tankConfigRoutes.js";
+import tankRoutes from "./routes/tankRoutes.js";
+import nozzlemanSalesRoutes from './routes/nozzlemanSalesRoutes.js';
 
 const app = express();
 
@@ -77,8 +81,11 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/nozzles", nozzleRoutes);
 app.use("/api/nozzlemen", nozzlemanRoutes); 
 app.use("/api/assignments", assignmentRoutes);
-app.use("/api/backups", backupRoutes);
+app.use("/api/backups", backupRoutes); // FIXED: Use app.use()
 app.use("/api/nozzleman", nozzlemanDashboardRoutes);
+app.use("/api/tanks/config", tankConfigRoutes); // For admin management
+app.use("/api/tanks", tankRoutes); // For general tank operations
+app.use('/api/nozzleman-sales', nozzlemanSalesRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
@@ -88,7 +95,6 @@ app.get("/api/health", (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
-
 
 // Error handler
 app.use(errorHandler);

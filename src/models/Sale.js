@@ -1,4 +1,4 @@
-// models/Sale.js - CHECK YOUR SCHEMA
+// models/Sale.js - UPDATED WITH STRICT POPULATE
 import mongoose from "mongoose";
 
 const saleSchema = mongoose.Schema(
@@ -46,6 +46,8 @@ const saleSchema = mongoose.Schema(
   },
   {
     timestamps: true,
+    // Add this to prevent population errors
+    strictPopulate: false
   }
 );
 

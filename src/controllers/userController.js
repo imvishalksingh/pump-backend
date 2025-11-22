@@ -45,33 +45,107 @@ export const deleteUser = asyncHandler(async (req, res) => {
   res.json({ message: "User removed" });
 });
 
+// @desc Create a new user
+// @route POST /api/users
+// @access Admin
+export const createUser = asyncHandler(async (req, res) => {
+  const { name, email, password, role } = req.body;
 
+  // Check if user already exists
+  const existingUser = await User.findOne({ email });
+  if (existingUser) {
+    return res.status(400).json({ message: "User with this email already exists" });
+  }
 
+  // Create user
+  const user = await User.create({
+    name,
+    email,
+    password,
+    role,
+  });
 
-// Create a new user
-export const createUser = async (req, res) => {
-  try {
-    const { name, email, password, role } = req.body;
+  res.status(201).json({
+    message: "User created successfully",
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
+  });
+});
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: "User with this email already exists" });
+// @desc Change user password
+// @route PATCH /api/users/:id/change-password
+// @access Private (User can change own password, Admin can change any password)
+export const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.params.id;
+
+  // Find user
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  // Check if user is changing their own password or if admin is changing it
+  const isOwnPasswordChange = req.user._id.toString() === userId;
+  const isAdmin = req.user.role === 'admin';
+
+  // If user is changing their own password, require current password
+  if (isOwnPasswordChange) {
+    if (!currentPassword) {
+      return res.status(400).json({ message: "Current password is required" });
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    try {
+      await user.changePassword(currentPassword, newPassword);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
+  } 
+  // If admin is changing another user's password, no current password required
+  else if (isAdmin) {
+    user.password = newPassword;
+    await user.save();
+  } 
+  // If user is trying to change someone else's password without admin privileges
+  else {
+    return res.status(403).json({ message: "Not authorized to change this user's password" });
+  }
 
-    // Create user
-    const user = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role,
+  res.json({
+    message: "Password changed successfully",
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
+  });
+});
+
+// @desc Change own password (convenience endpoint)
+// @route PATCH /api/users/change-my-password
+// @access Private
+export const changeMyPassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ 
+      message: "Current password and new password are required" 
     });
+  }
 
-    res.status(201).json({
-      message: "User created successfully",
+  // Get user with password field
+  const user = await User.findById(req.user._id).select('+password');
+  
+  try {
+    await user.changePassword(currentPassword, newPassword);
+    
+    res.json({
+      message: "Your password has been changed successfully",
       user: {
         id: user._id,
         name: user.name,
@@ -79,7 +153,7 @@ export const createUser = async (req, res) => {
         role: user.role,
       },
     });
-  } catch (err) {
-    res.status(500).json({ message: "Error creating user", error: err.message });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
   }
-};
+});

@@ -8,14 +8,20 @@ import AuditLog from "../models/AuditLog.js";
 import AuditReport from "../models/Audit.js";
 import Notification from "../models/Notification.js";
 import asyncHandler from "express-async-handler";
+import mongoose from "mongoose";
 
-// Helper: Generate or resolve low stock alerts
+// Helper: Generate or resolve low stock alerts - FIXED VERSION
 const handleLowStockAlert = async (stock) => {
   try {
-    if (!stock?.product) return;
+    if (!stock?.product || stock.currentLevel === undefined) {
+      console.log('⚠️ Invalid stock data for alert handling:', stock);
+      return;
+    }
 
-    // If below 30% capacity -> create alert
-    if (stock.currentLevel < 30) {
+    console.log(`🔍 Checking stock alert for ${stock.product}: ${stock.currentLevel}%`);
+
+    // If below 20% capacity -> create alert
+    if (stock.currentLevel <= 20) {
       const existing = await Notification.findOne({
         type: "Stock",
         description: { $regex: stock.product, $options: "i" },
@@ -25,17 +31,19 @@ const handleLowStockAlert = async (stock) => {
       if (!existing) {
         await Notification.create({
           type: "Stock",
-          description: `${stock.product} stock below 30%`,
-          priority: stock.currentLevel < 15 ? "High" : "Medium",
+          description: `${stock.product} stock critically low at ${stock.currentLevel}%`,
+          priority: stock.currentLevel <= 10 ? "High" : "Medium",
           status: "Unread",
         });
-        console.log(`🔔 Low stock alert created for ${stock.product}`);
+        console.log(`🔔 Low stock alert created for ${stock.product} at ${stock.currentLevel}%`);
+      } else {
+        console.log(`ℹ️ Low stock alert already exists for ${stock.product}`);
       }
     }
 
-    // If refilled (> 40%) -> mark previous alerts as Read
-    if (stock.currentLevel > 40) {
-      await Notification.updateMany(
+    // If refilled (> 30%) -> mark previous alerts as Read
+    if (stock.currentLevel > 30) {
+      const result = await Notification.updateMany(
         {
           type: "Stock",
           description: { $regex: stock.product, $options: "i" },
@@ -43,12 +51,15 @@ const handleLowStockAlert = async (stock) => {
         },
         { status: "Read" }
       );
+      
+      if (result.modifiedCount > 0) {
+        console.log(`✅ Resolved ${result.modifiedCount} low stock alerts for ${stock.product}`);
+      }
     }
   } catch (err) {
     console.error("⚠️ Error handling stock alert:", err.message);
   }
 };
-
 // @desc    Get auditor dashboard statistics
 // @route   GET /api/audit/stats
 // @access  Private (Auditor)
@@ -277,9 +288,7 @@ export const verifyCashEntry = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Get stock discrepancies
-// @route   GET /api/audit/stock/discrepancies
-// @access  Private (Auditor)
+// In auditController.js - Update getStockDiscrepancies to show pending adjustments
 export const getStockDiscrepancies = asyncHandler(async (req, res) => {
   try {
     const today = new Date();
@@ -313,11 +322,12 @@ export const getStockDiscrepancies = asyncHandler(async (req, res) => {
             difference,
             stockEntry: {
               openingStock: latestStock.openingStock,
-              purchases: latestStock.purchases,
-              sales: latestStock.sales,
+              purchases: latestStock.purchaseQuantity || 0,
+              sales: 0,
               closingStock: latestStock.closingStock,
-              capacity: latestStock.capacity,
-              currentLevel: latestStock.currentLevel
+              capacity: latestStock.capacity || 0,
+              currentLevel: latestStock.currentLevel,
+              alert: latestStock.alert
             },
             severity: Math.abs(difference) > 100 ? "High" : "Medium"
           });
@@ -325,11 +335,12 @@ export const getStockDiscrepancies = asyncHandler(async (req, res) => {
       }
     }
 
-    // Get pending stock adjustments
+    // Get ALL pending stock adjustments (not just today)
     const pendingAdjustments = await StockAdjustment.find({
       status: "Pending"
     })
     .populate("adjustedBy", "name")
+    .populate("tank", "tankName product capacity")
     .sort({ createdAt: -1 });
 
     console.log(`📦 Found ${discrepancies.length} discrepancies and ${pendingAdjustments.length} pending adjustments`);
@@ -345,78 +356,42 @@ export const getStockDiscrepancies = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Approve stock adjustment
-// @route   POST /api/audit/stock/adjustments/:id/approve
-// @access  Private (Auditor)
-// In auditController.js - approveStockAdjustment function
+// In auditController.js - UPDATE approveStockAdjustment to handle fuel stock update
 export const approveStockAdjustment = asyncHandler(async (req, res) => {
-  const { approved, notes } = req.body;
-
   try {
-    console.log("🔄 Processing stock adjustment:", req.params.id, { approved, notes });
+    const { id } = req.params;
+    const { approved, notes } = req.body;
+    const auditorId = req.user._id;
 
-    const adjustment = await StockAdjustment.findById(req.params.id);
+    console.log(`🔄 Processing stock adjustment: ${id}, Approved: ${approved}`);
+
+    // Find the adjustment
+    const adjustment = await StockAdjustment.findById(id)
+      .populate('tank', 'capacity tankName product');
+    
     if (!adjustment) {
-      console.log("❌ Adjustment not found:", req.params.id);
-      res.status(404);
-      throw new Error("Stock adjustment not found");
+      return res.status(404).json({
+        message: "Stock adjustment not found"
+      });
     }
 
-    console.log("📋 Found adjustment:", {
-      id: adjustment._id,
-      status: adjustment.status,
-      product: adjustment.product
-    });
-
     if (adjustment.status !== "Pending") {
-      console.log("❌ Adjustment not pending:", adjustment.status);
-      res.status(400);
-      throw new Error("Adjustment is not pending approval");
+      return res.status(400).json({
+        message: "Adjustment has already been processed"
+      });
     }
 
     // Update adjustment status
     adjustment.status = approved ? "Approved" : "Rejected";
-    adjustment.approvedBy = req.user._id;
+    adjustment.approvedBy = auditorId;
+    adjustment.approvalNotes = notes || `Stock adjustment ${approved ? 'approved' : 'rejected'}`;
     adjustment.approvedAt = new Date();
-    adjustment.approvalNotes = notes;
 
     await adjustment.save();
-    console.log(`✅ Stock adjustment ${approved ? 'approved' : 'rejected'}:`, adjustment._id);
 
-    // ✅ CRITICAL: Only create FuelStock entry if approved
-    let fuelStockEntry = null;
+    // ONLY if approved, update the actual fuel stock
     if (approved) {
-      console.log("✅ Creating FuelStock entry for approved adjustment");
-      
-      const latestStock = await FuelStock.findOne({ product: adjustment.product })
-        .sort({ createdAt: -1 });
-
-      console.log("📊 Latest stock found:", latestStock);
-
-      // Check if we have required fields
-      if (!latestStock) {
-        console.log("❌ No latest stock found for product:", adjustment.product);
-        res.status(400);
-        throw new Error(`No stock data found for ${adjustment.product}`);
-      }
-
-      fuelStockEntry = await FuelStock.create({
-        product: adjustment.product,
-        openingStock: adjustment.previousStock,
-        purchases: adjustment.adjustmentType === "addition" ? adjustment.quantity : 0,
-        sales: adjustment.adjustmentType === "deduction" ? adjustment.quantity : 0,
-        capacity: latestStock.capacity,
-        rate: latestStock.rate || 95,
-        amount: 0,
-        supplier: "System Adjustment - Auditor Approved",
-        invoiceNumber: `ADJ-APPROVED-${Date.now()}`,
-        date: new Date()
-      });
-
-      console.log("✅ FuelStock created:", fuelStockEntry._id);
-      
-      // ✅ Trigger low stock alert check
-      await handleLowStockAlert(fuelStockEntry);
+      await updateFuelStockFromAdjustment(adjustment);
     }
 
     // Create audit log
@@ -424,46 +399,113 @@ export const approveStockAdjustment = asyncHandler(async (req, res) => {
       action: approved ? "approved" : "rejected",
       entityType: "StockAdjustment",
       entityId: adjustment._id,
-      entityName: `Stock Adjustment for ${adjustment.product}`,
-      performedBy: req.user._id,
-      notes: notes || (approved ? "Stock adjustment approved and applied" : "Stock adjustment rejected"),
+      entityName: `${adjustment.tank?.product} ${adjustment.adjustmentType}`,
+      performedBy: auditorId,
+      notes: adjustment.approvalNotes,
       details: {
-        product: adjustment.product,
+        product: adjustment.tank?.product,
         adjustmentType: adjustment.adjustmentType,
         quantity: adjustment.quantity,
-        reason: adjustment.reason,
         previousStock: adjustment.previousStock,
-        newStock: adjustment.newStock,
-        fuelStockCreated: approved,
-        fuelStockId: fuelStockEntry?._id
+        newStock: adjustment.newStock
       }
     });
 
-    console.log("✅ Audit log created successfully");
+    console.log(`✅ Stock adjustment ${approved ? 'approved' : 'rejected'} successfully`);
 
-    res.json({
-      message: `Stock adjustment ${approved ? "approved and applied" : "rejected"} successfully`,
-      adjustment,
-      fuelStockCreated: approved,
-      fuelStock: fuelStockEntry
+    res.status(200).json({
+      message: `Stock adjustment ${approved ? 'approved' : 'rejected'} successfully`,
+      adjustment
     });
 
   } catch (error) {
-    console.error("❌ Error in approveStockAdjustment:", error);
-    console.error("❌ Error details:", {
-      message: error.message,
-      stack: error.stack,
-      name: error.name
+    console.error("❌ Error processing stock adjustment:", error);
+    res.status(500).json({
+      message: "Failed to process stock adjustment",
+      error: error.message
     });
-    res.status(500);
-    throw new Error(`Failed to process stock adjustment: ${error.message}`);
   }
 });
 
+// Update the updateFuelStockFromAdjustment function to create FuelStock record
+const updateFuelStockFromAdjustment = async (adjustment) => {
+  try {
+    const FuelStock = mongoose.model("FuelStock");
+    const TankConfig = mongoose.model("TankConfig");
+    
+    console.log('🔄 Updating fuel stock for approved adjustment:', adjustment._id);
 
-// @desc    Get pending sales audits
-// @route   GET /api/audit/sales/pending
-// @access  Private (Auditor)
+    // Validate tank exists
+    if (!adjustment.tank) {
+      throw new Error("Tank not found in adjustment");
+    }
+
+    // Get current tank stock
+    const tank = await TankConfig.findById(adjustment.tank._id);
+    if (!tank) {
+      throw new Error("Tank configuration not found");
+    }
+
+    const currentStock = tank.currentStock || 0;
+    
+    console.log(`📊 Current tank stock: ${currentStock}L, Adjustment target: ${adjustment.newStock}L`);
+
+    // Calculate the difference for the FuelStock record
+    const quantity = adjustment.newStock - currentStock;
+    
+    // Create FuelStock transaction record
+    const fuelStockData = {
+      tank: adjustment.tank._id,
+      transactionType: "adjustment",
+      quantity: quantity,
+      previousStock: currentStock,
+      newStock: adjustment.newStock,
+      product: adjustment.tank.product,
+      ratePerLiter: 0,
+      amount: 0,
+      supplier: "System Adjustment - Auditor Approved",
+      invoiceNumber: `ADJ-APPROVED-${Date.now()}`,
+      reason: adjustment.reason,
+      date: new Date()
+    };
+
+    console.log('💾 Creating FuelStock record:', fuelStockData);
+
+    const fuelStock = await FuelStock.create(fuelStockData);
+
+    // Update tank current stock
+    const currentLevel = Math.round((adjustment.newStock / tank.capacity) * 100);
+    const alert = currentLevel <= 20;
+
+    await TankConfig.findByIdAndUpdate(
+      adjustment.tank._id, 
+      {
+        currentStock: adjustment.newStock,
+        currentLevel: currentLevel,
+        alert: alert,
+        lastUpdated: new Date()
+      }
+    );
+
+    console.log(`✅ Updated tank ${tank.tankName} stock to: ${adjustment.newStock}L`);
+
+    // Trigger low stock alert handling
+    await handleLowStockAlert({
+      product: adjustment.tank.product,
+      currentLevel: currentLevel,
+      closingStock: adjustment.newStock
+    });
+
+    return fuelStock;
+
+  } catch (error) {
+    console.error("❌ Error updating fuel stock from adjustment:", error);
+    throw error;
+  }
+};
+
+
+
 export const getPendingSalesAudits = asyncHandler(async (req, res) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -660,44 +702,55 @@ export const createAuditSignOff = asyncHandler(async (req, res) => {
   }
 });
 
-// Helper function to calculate expected stock
+// Fix the calculateExpectedStock function
 const calculateExpectedStock = async (product, startDate, endDate) => {
   try {
-    // Get opening stock for the day
-    const openingStockEntry = await FuelStock.findOne({
+    console.log(`📊 Calculating expected stock for ${product} from ${startDate} to ${endDate}`);
+
+    // Get ALL stock entries for this product, sorted by date
+    const stockEntries = await FuelStock.find({
       product,
       date: { $gte: startDate, $lt: endDate }
-    }).sort({ createdAt: 1 });
+    }).sort({ date: 1, createdAt: 1 });
 
-    if (!openingStockEntry) return 0;
+    if (stockEntries.length === 0) {
+      console.log(`📊 No stock entries found for ${product} in this period`);
+      return 0;
+    }
 
-    const openingStock = openingStockEntry.openingStock;
+    // The first entry's opening stock is our starting point
+    const openingStock = stockEntries[0].openingStock;
+    console.log(`📊 Opening stock for ${product}: ${openingStock}L`);
 
-    // Calculate total purchases
-    const purchaseEntries = await FuelStock.find({
-      product,
-      date: { $gte: startDate, $lt: endDate },
-      purchases: { $gt: 0 }
+    // Calculate net changes from all entries
+    let totalPurchases = 0;
+    let totalSales = 0;
+
+    stockEntries.forEach((entry, index) => {
+      const purchases = entry.purchaseQuantity || 0;
+      // For sales, we need to calculate from closing/opening
+      const sales = (entry.openingStock + purchases) - (entry.closingStock || 0);
+      
+      totalPurchases += purchases;
+      totalSales += Math.max(0, sales); // Ensure sales don't go negative
+      
+      console.log(`📊 Entry ${index + 1}: Opening=${entry.openingStock}L, Purchases=${purchases}L, Closing=${entry.closingStock}L, Sales=${sales}L`);
     });
 
-    const totalPurchases = purchaseEntries.reduce((sum, entry) => sum + entry.purchases, 0);
-
-    // Calculate total sales from sales transactions
-    const salesTransactions = await Sale.find({
-      createdAt: { $gte: startDate, $lt: endDate }
-    }).populate("nozzle", "fuelType");
-
-    const totalSales = salesTransactions
-      .filter(transaction => transaction.nozzle?.fuelType === product)
-      .reduce((sum, transaction) => sum + (transaction.liters || 0), 0);
-
-    return openingStock + totalPurchases - totalSales;
+    const expectedStock = openingStock + totalPurchases - totalSales;
+    
+    console.log(`📊 Expected stock calculation for ${product}:`);
+    console.log(`   Opening: ${openingStock}L`);
+    console.log(`   Purchases: +${totalPurchases}L`);
+    console.log(`   Sales: -${totalSales}L`);
+    console.log(`   Expected: ${expectedStock}L`);
+    
+    return expectedStock;
   } catch (error) {
-    console.error("Error calculating expected stock:", error);
+    console.error("❌ Error calculating expected stock:", error);
     return 0;
   }
 };
-
 // Helper function to check stock discrepancies
 const checkStockDiscrepancies = async () => {
   try {

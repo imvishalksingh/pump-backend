@@ -66,5 +66,18 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
+// Change password method
+userSchema.methods.changePassword = async function (currentPassword, newPassword) {
+  // Verify current password
+  const isMatch = await this.matchPassword(currentPassword);
+  if (!isMatch) {
+    throw new Error("Current password is incorrect");
+  }
+
+  // Update password
+  this.password = newPassword;
+  await this.save();
+};
+
 const User = mongoose.model("User", userSchema);
 export default User;
