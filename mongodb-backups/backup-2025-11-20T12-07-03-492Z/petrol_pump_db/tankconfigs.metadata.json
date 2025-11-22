@@ -1,1 +1,0 @@
-{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"},{"v":{"$numberInt":"2"},"key":{"tankName":{"$numberInt":"1"}},"name":"tankName_1","background":true,"unique":true}],"uuid":"26894f30381d4a568b5fc482bfec43e2","collectionName":"tankconfigs","type":"collection"}
