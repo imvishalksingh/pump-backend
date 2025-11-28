@@ -760,3 +760,87 @@ export const cancelShift = asyncHandler(async (req, res) => {
     throw new Error("Failed to cancel shift");
   }
 });
+
+// Add these endpoints to your shiftController.js
+
+// @desc    Get yesterday's closing readings for a nozzleman
+// @route   GET /api/shifts/yesterday-readings/:nozzlemanId
+// @access  Private
+export const getYesterdayReadings = asyncHandler(async (req, res) => {
+  const { nozzlemanId } = req.params;
+  const { date } = req.query;
+  
+  const yesterday = new Date(date);
+  yesterday.setDate(yesterday.getDate() - 1);
+  
+  // Find yesterday's completed shifts for this nozzleman
+  const yesterdayShifts = await Shift.find({
+    nozzleman: nozzlemanId,
+    status: "Completed",
+    endTime: {
+      $gte: new Date(yesterday.setHours(0, 0, 0, 0)),
+      $lte: new Date(yesterday.setHours(23, 59, 59, 999))
+    }
+  }).populate('nozzle', 'number fuelType');
+  
+  const nozzleReadings = yesterdayShifts.map(shift => ({
+    nozzleId: shift.nozzle._id,
+    nozzleNumber: shift.nozzle.number,
+    fuelType: shift.nozzle.fuelType,
+    closingReading: shift.endReading // This becomes today's opening
+  }));
+  
+  res.json({ nozzleReadings });
+});
+
+// @desc    Create manual shift entry
+// @route   POST /api/shifts/manual-entry
+// @access  Private
+export const createManualShiftEntry = asyncHandler(async (req, res) => {
+  const manualData = req.body;
+  
+  // Create shift record with manual data
+  const shift = await Shift.create({
+    shiftId: manualData.shiftId,
+    nozzleman: manualData.nozzlemanId,
+    startTime: new Date(`${manualData.date}T00:00:00`),
+    endTime: new Date(`${manualData.date}T23:59:59`),
+    startReading: 0, // Not used in manual entry
+    endReading: 0, // Not used in manual entry
+    cashCollected: manualData.cashSales,
+    phonePeSales: manualData.phonePeSales,
+    posSales: manualData.posSales,
+    creditSales: manualData.creditSales,
+    expenses: manualData.expenses,
+    cashDeposit: manualData.cashDeposit,
+    cashInHand: manualData.cashInHand,
+    fuelDispensed: manualData.fuelDispensed,
+    status: "Completed",
+    notes: manualData.notes,
+    isManualEntry: true,
+    recordedBy: req.user._id // Admin/manager who entered the data
+  });
+  
+  // Create nozzle reading records
+  for (const reading of manualData.nozzleReadings) {
+    await NozzleReading.create({
+      shift: shift._id,
+      nozzle: reading.nozzleId,
+      openingReading: reading.openingReading,
+      closingReading: reading.closingReading,
+      sales: reading.sales,
+      recordedBy: req.user._id
+    });
+    
+    // Update nozzle current reading
+    await Nozzle.findByIdAndUpdate(reading.nozzleId, {
+      currentReading: reading.closingReading
+    });
+  }
+  
+  res.status(201).json({
+    success: true,
+    message: "Manual shift data recorded successfully",
+    shift
+  });
+});

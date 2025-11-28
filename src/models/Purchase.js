@@ -1,4 +1,4 @@
-// models/Purchase.js
+// models/Purchase.js - UPDATED WITH FUELSTOCK INTEGRATION
 import mongoose from "mongoose";
 
 const purchaseSchema = new mongoose.Schema({
@@ -33,23 +33,27 @@ const purchaseSchema = new mongoose.Schema({
   // Fuel Purchase specific fields (VAT based)
   product: {
     type: String,
-    enum: ["Petrol", "Diesel", "CNG", "Lube"]
+    enum: ["MS", "HSD"]
   },
   tank: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "TankConfig"
+    ref: "TankConfig",
+    required: function() { return this.purchaseType === "fuel"; }
   },
   purchaseQuantity: {
     type: Number,
-    min: 0
+    min: 0,
+    required: function() { return this.purchaseType === "fuel"; }
   },
   purchaseValue: {
     type: Number,
-    min: 0
+    min: 0,
+    required: function() { return this.purchaseType === "fuel"; }
   },
   ratePerLiter: {
     type: Number,
-    min: 0
+    min: 0,
+    required: function() { return this.purchaseType === "fuel"; }
   },
   vehicleNumber: {
     type: String,
@@ -133,6 +137,12 @@ const purchaseSchema = new mongoose.Schema({
     default: "completed"
   },
   
+  // Linked FuelStock transaction (for fuel purchases)
+  fuelStockEntry: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "FuelStock"
+  },
+  
   // Audit fields
   recordedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -165,35 +175,18 @@ purchaseSchema.virtual("netAmount").get(function() {
   }
 });
 
-// Indexes for better query performance
-purchaseSchema.index({ purchaseType: 1, invoiceDate: -1 });
-purchaseSchema.index({ supplier: 1 });
-purchaseSchema.index({ invoiceNumber: 1 });
-purchaseSchema.index({ recordedBy: 1 });
-purchaseSchema.index({ status: 1 });
-
 // Pre-save middleware to calculate total value if not provided
 purchaseSchema.pre("save", function(next) {
-  if (this.isModified('purchaseValue') || this.isModified('vat') || 
-      this.isModified('otherCharges') || this.isModified('taxableValue') ||
-      this.isModified('cgst') || this.isModified('sgst') || 
-      this.isModified('igst') || this.isModified('discount')) {
-    
-    if (this.purchaseType === "fuel") {
-      // Fuel: purchaseValue + vat + otherCharges
-      this.totalValue = (this.purchaseValue || 0) + (this.vat || 0) + (this.otherCharges || 0);
-    } else {
-      // Lube & Fixed Assets: taxableValue + CGST + SGST + IGST - discount
-      this.totalValue = (this.taxableValue || 0) + (this.cgst || 0) + (this.sgst || 0) + (this.igst || 0) - (this.discount || 0);
-      
-      // Ensure total value doesn't go negative
-      if (this.totalValue < 0) {
-        this.totalValue = 0;
-      }
+  // Only validate fuel purchases with tank reference
+  if (this.purchaseType === "fuel" && this.tank) {
+    // Basic validation - ensure purchaseQuantity is positive
+    if (this.purchaseQuantity <= 0) {
+      return next(new Error("Purchase quantity must be greater than 0"));
     }
   }
   next();
 });
+
 
 // Instance method to get tax summary
 purchaseSchema.methods.getTaxSummary = function() {
@@ -231,9 +224,33 @@ purchaseSchema.statics.getPurchasesByType = async function(type, startDate, endD
   }
   
   return this.find(query)
-    .populate("tank", "tankName capacity")
+    .populate("tank", "tankName capacity product")
+    .populate("fuelStockEntry", "previousStock newStock")
     .populate("recordedBy", "name email")
     .sort({ invoiceDate: -1 });
+};
+
+// Static method to get fuel purchases with stock impact
+purchaseSchema.statics.getFuelPurchasesWithStock = async function(startDate, endDate) {
+  const purchases = await this.find({
+    purchaseType: "fuel",
+    invoiceDate: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    }
+  })
+  .populate("tank", "tankName product capacity currentStock")
+  .populate("fuelStockEntry", "previousStock newStock")
+  .sort({ invoiceDate: -1 });
+
+  return purchases.map(purchase => ({
+    ...purchase.toObject(),
+    stockImpact: purchase.fuelStockEntry ? {
+      previousStock: purchase.fuelStockEntry.previousStock,
+      newStock: purchase.fuelStockEntry.newStock,
+      increase: purchase.fuelStockEntry.newStock - purchase.fuelStockEntry.previousStock
+    } : null
+  }));
 };
 
 // Static method to get GST summary for filing
@@ -294,10 +311,10 @@ purchaseSchema.statics.getVATSummary = async function(startDate, endDate) {
     totalVAT: 0,
     totalOtherCharges: 0,
     totalValue: 0,
+    totalQuantity: 0,
     byProduct: {
-      Petrol: { count: 0, purchaseValue: 0, vat: 0 },
-      Diesel: { count: 0, purchaseValue: 0, vat: 0 },
-      CNG: { count: 0, purchaseValue: 0, vat: 0 }
+      MS: { count: 0, purchaseValue: 0, vat: 0, quantity: 0 },
+      HSD: { count: 0, purchaseValue: 0, vat: 0, quantity: 0 }
     }
   };
 
@@ -306,16 +323,26 @@ purchaseSchema.statics.getVATSummary = async function(startDate, endDate) {
     summary.totalVAT += purchase.vat || 0;
     summary.totalOtherCharges += purchase.otherCharges || 0;
     summary.totalValue += purchase.totalValue || 0;
+    summary.totalQuantity += purchase.purchaseQuantity || 0;
 
     if (summary.byProduct[purchase.product]) {
       summary.byProduct[purchase.product].count++;
       summary.byProduct[purchase.product].purchaseValue += purchase.purchaseValue || 0;
       summary.byProduct[purchase.product].vat += purchase.vat || 0;
+      summary.byProduct[purchase.product].quantity += purchase.purchaseQuantity || 0;
     }
   });
 
   return summary;
 };
+
+// Indexes for better query performance
+purchaseSchema.index({ purchaseType: 1, invoiceDate: -1 });
+purchaseSchema.index({ supplier: 1 });
+purchaseSchema.index({ invoiceNumber: 1 });
+purchaseSchema.index({ recordedBy: 1 });
+purchaseSchema.index({ status: 1 });
+purchaseSchema.index({ tank: 1 });
 
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 export default Purchase;

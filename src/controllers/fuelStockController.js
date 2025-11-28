@@ -1,4 +1,4 @@
-// controllers/fuelStockController.js - UPDATED with mongoose import
+// controllers/fuelStockController.js - COMPLETE FIXED VERSION
 import mongoose from "mongoose";
 import FuelStock from "../models/FuelStock.js";
 import StockAdjustment from "../models/StockAdjustment.js";
@@ -7,7 +7,9 @@ import asyncHandler from "express-async-handler";
 import Purchase from "../models/Purchase.js";
 import TankConfig from "../models/TankConfig.js"; 
 
-
+// @desc    Create tank purchase (SIMPLIFIED - No Purchase record conflicts)
+// @route   POST /api/stock/purchase/tank
+// @access  Private
 export const createTankPurchase = asyncHandler(async (req, res) => {
   const {
     tank,
@@ -20,9 +22,12 @@ export const createTankPurchase = asyncHandler(async (req, res) => {
     density
   } = req.body;
 
-  if (!tank || !invoiceNumber || !purchaseQuantity || !purchaseValue || !ratePerLiter || !supplier) {
+  console.log("🛒 Purchase data received:", req.body);
+
+  // Basic validation
+  if (!tank || !invoiceNumber || !purchaseQuantity || !supplier) {
     res.status(400);
-    throw new Error("Please provide all required fields");
+    throw new Error("Please provide tank, invoice number, quantity, and supplier");
   }
 
   // Get tank details
@@ -32,219 +37,106 @@ export const createTankPurchase = asyncHandler(async (req, res) => {
     throw new Error("Tank not found");
   }
 
+  // Get current stock from tank config or latest transaction
   const previousStock = tankConfig.currentStock || 0;
   const newStock = previousStock + parseFloat(purchaseQuantity);
+
+  console.log(`📊 Stock calculation: ${previousStock} + ${purchaseQuantity} = ${newStock}`);
 
   // Validate capacity
   if (newStock > tankConfig.capacity) {
     res.status(400);
-    throw new Error(`Purchase quantity exceeds tank capacity. Current: ${previousStock}L, Capacity: ${tankConfig.capacity}L, New total would be: ${newStock}L`);
+    throw new Error(`Purchase quantity exceeds tank capacity. Current: ${previousStock}L, Capacity: ${tankConfig.capacity}L`);
   }
 
-  // Create FuelStock transaction - FIXED: Actually create the record
+  // Create FuelStock entry ONLY (no Purchase record to avoid conflicts)
   const fuelStockData = {
     tank,
-    transactionType: "purchase", // REQUIRED
-    quantity: parseFloat(purchaseQuantity), // REQUIRED
-    previousStock: previousStock, // REQUIRED
-    newStock: newStock, // REQUIRED
-    product: tankConfig.product, // For purchases
-    purchaseQuantity: parseFloat(purchaseQuantity), // For purchases
-    purchaseValue: parseFloat(purchaseValue), // For purchases
-    ratePerLiter: parseFloat(ratePerLiter),
-    amount: parseFloat(purchaseValue),
+    transactionType: "purchase",
+    quantity: parseFloat(purchaseQuantity),
+    previousStock: previousStock,
+    newStock: newStock,
+    product: tankConfig.product,
+    amount: parseFloat(purchaseValue) || 0,
     supplier: supplier.trim(),
     invoiceNumber: invoiceNumber.trim(),
     vehicleNumber: vehicleNumber?.trim(),
     density: density ? parseFloat(density) : undefined,
-    date: new Date()
+    date: new Date(),
+    recordedBy: req.user._id
   };
 
-  console.log("💾 Creating FuelStock purchase with data:", fuelStockData);
+  console.log("💾 Creating FuelStock:", fuelStockData);
 
-  // ✅ FIX: Actually create the FuelStock record
   const fuelStock = await FuelStock.create(fuelStockData);
 
   // Update tank current stock
+  const currentLevel = Math.round((newStock / tankConfig.capacity) * 100);
+  const alert = currentLevel <= 20;
+  
   await TankConfig.findByIdAndUpdate(tank, {
     currentStock: newStock,
-    currentLevel: Math.round((newStock / tankConfig.capacity) * 100),
-    alert: newStock / tankConfig.capacity <= 0.2,
+    currentLevel: currentLevel,
+    alert: alert,
     lastUpdated: new Date()
   });
 
-  // Create Purchase record for accounting
-  const purchase = await Purchase.create({
-    purchaseType: "fuel",
-    supplier: supplier.trim(),
-    invoiceNumber: invoiceNumber.trim(),
-    invoiceDate: new Date(),
-    product: tankConfig.product,
-    tank,
-    purchaseQuantity: parseFloat(purchaseQuantity),
-    purchaseValue: parseFloat(purchaseValue),
-    ratePerLiter: parseFloat(ratePerLiter),
-    vehicleNumber: vehicleNumber?.trim(),
-    density: density ? parseFloat(density) : undefined,
-    totalValue: parseFloat(purchaseValue),
-    recordedBy: req.user._id
-  });
-
-  res.status(201).json({
-    message: "Tank purchase recorded successfully",
-    fuelStock, // ✅ Now fuelStock is defined
-    purchase
-  });
-});
-
-// Helper: Generate or resolve low stock alerts
-const handleLowStockAlert = async (stock) => {
-  try {
-    if (!stock?.product) return;
-
-    // If below 30% capacity -> create alert
-    if (stock.currentLevel < 30) {
-      const existing = await Notification.findOne({
-        type: "Stock",
-        description: { $regex: stock.product, $options: "i" },
-        status: "Unread",
-      });
-
-      if (!existing) {
-        await Notification.create({
-          type: "Stock",
-          description: `${stock.product} stock below 30%`,
-          priority: stock.currentLevel < 15 ? "High" : "Medium",
-          status: "Unread",
-        });
-        console.log(`🔔 Low stock alert created for ${stock.product}`);
-      }
-    }
-
-    // If refilled (> 40%) -> mark previous alerts as Read
-    if (stock.currentLevel > 40) {
-      await Notification.updateMany(
-        {
-          type: "Stock",
-          description: { $regex: stock.product, $options: "i" },
-          status: "Unread",
-        },
-        { status: "Read" }
-      );
-    }
-  } catch (err) {
-    console.error("⚠️ Error handling stock alert:", err.message);
-  }
-};
-
-// @desc    Create new fuel stock entry
-// @route   POST /api/stock
-// @access  Private
-export const createFuelStock = asyncHandler(async (req, res) => {
-  console.log("📦 Received stock purchase data:", req.body);
-  
-  const {
-    product,
-    tank,
-    invoiceNumber,
-    purchaseQuantity,
-    purchaseValue,
-    vehicleNumber,
-    density,
-    ratePerLiter,
-    supplier
-  } = req.body;
-
-  // Debug: Check each field
-  console.log("🔍 Field check:");
-  console.log("- product:", product, !!product);
-  console.log("- tank:", tank, !!tank);
-  console.log("- invoiceNumber:", invoiceNumber, !!invoiceNumber);
-  console.log("- purchaseQuantity:", purchaseQuantity, !!purchaseQuantity);
-  console.log("- purchaseValue:", purchaseValue, !!purchaseValue);
-  console.log("- ratePerLiter:", ratePerLiter, !!ratePerLiter);
-  console.log("- supplier:", supplier, !!supplier);
-  console.log("- vehicleNumber:", vehicleNumber);
-  console.log("- density:", density);
-
-  // Validate required fields with specific error messages
-  const missingFields = [];
-  if (!product) missingFields.push("product");
-  if (!tank) missingFields.push("tank");
-  if (!invoiceNumber) missingFields.push("invoiceNumber");
-  if (!purchaseQuantity) missingFields.push("purchaseQuantity");
-  if (!purchaseValue) missingFields.push("purchaseValue");
-  if (!ratePerLiter) missingFields.push("ratePerLiter");
-  if (!supplier) missingFields.push("supplier");
-
-  if (missingFields.length > 0) {
-    console.log("❌ Missing required fields:", missingFields);
-    res.status(400);
-    throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
-  }
-
-  // Check if invoice number already exists
-  const existingInvoice = await FuelStock.findOne({ invoiceNumber });
-  if (existingInvoice) {
-    console.log("❌ Duplicate invoice number:", invoiceNumber);
-    res.status(400);
-    throw new Error("Invoice number already exists");
-  }
-
-  // Validate tank exists and matches product
-  const TankConfig = mongoose.model("TankConfig");
-  const tankConfig = await TankConfig.findById(tank);
-  if (!tankConfig) {
-    console.log("❌ Tank not found:", tank);
-    res.status(404);
-    throw new Error("Tank not found");
-  }
-
-  if (tankConfig.product !== product) {
-    console.log("❌ Tank-product mismatch:", tankConfig.product, "!=", product);
-    res.status(400);
-    throw new Error("Selected tank does not match the product");
-  }
-
-  // Validate purchase quantity doesn't exceed tank capacity
-  const latestStock = await FuelStock.findOne({ tank }).sort({ createdAt: -1 });
-  const currentStock = latestStock ? latestStock.closingStock : 0;
-  const newStock = currentStock + parseFloat(purchaseQuantity);
-  
-  if (newStock > tankConfig.capacity) {
-    console.log("❌ Capacity exceeded:", newStock, ">", tankConfig.capacity);
-    res.status(400);
-    throw new Error(`Purchase quantity exceeds tank capacity. Current: ${currentStock}L, Capacity: ${tankConfig.capacity}L, New total would be: ${newStock}L`);
-  }
-
-  // Create the fuel stock entry
-  const fuelStockData = {
-    product,
-    tank,
-    invoiceNumber: invoiceNumber.trim(),
-    purchaseQuantity: parseFloat(purchaseQuantity),
-    purchaseValue: parseFloat(purchaseValue),
-    ratePerLiter: parseFloat(ratePerLiter),
-    supplier: supplier.trim()
-  };
-
-  // Add optional fields if provided
-  if (vehicleNumber) fuelStockData.vehicleNumber = vehicleNumber.trim();
-  if (density) fuelStockData.density = parseFloat(density);
-
-  console.log("💾 Creating fuel stock with data:", fuelStockData);
-
-  const fuelStock = await FuelStock.create(fuelStockData);
-
-  // Handle low stock alerts
-  await handleLowStockAlert(fuelStock);
-
-  console.log("✅ Stock purchase recorded successfully:", fuelStock._id);
+  console.log(`✅ Tank updated: ${tankConfig.tankName} -> ${newStock}L (${currentLevel}%)`);
 
   res.status(201).json({
     success: true,
-    message: "Stock purchase recorded successfully",
-    fuelStock
+    message: "Tank purchase recorded successfully",
+    fuelStock,
+    tankUpdate: {
+      currentStock: newStock,
+      currentLevel: currentLevel,
+      alert: alert
+    }
+  });
+});
+
+// @desc    Sync all tank stocks (emergency fix)
+// @route   POST /api/stock/sync-tanks
+// @access  Private/Admin
+export const syncTankStocks = asyncHandler(async (req, res) => {
+  const tanks = await TankConfig.find({ isActive: true });
+  
+  const results = await Promise.all(
+    tanks.map(async (tank) => {
+      try {
+        const latestStock = await FuelStock.findOne({ tank: tank._id })
+          .sort({ createdAt: -1 });
+        
+        const newStock = latestStock ? latestStock.newStock : 0;
+        const currentLevel = Math.round((newStock / tank.capacity) * 100);
+        const alert = currentLevel <= 20;
+        
+        await TankConfig.findByIdAndUpdate(tank._id, {
+          currentStock: newStock,
+          currentLevel: currentLevel,
+          alert: alert,
+          lastUpdated: new Date()
+        });
+        
+        return {
+          tank: tank.tankName,
+          previousStock: tank.currentStock,
+          newStock: newStock,
+          success: true
+        };
+      } catch (error) {
+        return {
+          tank: tank.tankName,
+          error: error.message,
+          success: false
+        };
+      }
+    })
+  );
+
+  res.json({
+    message: "Tank stocks synchronized",
+    results
   });
 });
 
@@ -252,11 +144,12 @@ export const createFuelStock = asyncHandler(async (req, res) => {
 // @route   GET /api/stock
 // @access  Private
 export const getFuelStocks = asyncHandler(async (req, res) => {
-  const { product, tank, startDate, endDate } = req.query;
+  const { product, tank, startDate, endDate, transactionType } = req.query;
 
   let query = {};
   if (product && product !== "all") query.product = product;
   if (tank && tank !== "all") query.tank = tank;
+  if (transactionType && transactionType !== "all") query.transactionType = transactionType;
   
   if (startDate && endDate) {
     query.date = { 
@@ -266,13 +159,14 @@ export const getFuelStocks = asyncHandler(async (req, res) => {
   }
 
   const fuelStocks = await FuelStock.find(query)
-    .populate("tank", "name capacity product currentStock")
+    .populate("tank", "tankName capacity product currentStock currentLevel")
+    .populate("purchaseReference", "invoiceNumber invoiceDate totalValue")
     .sort({ createdAt: -1 });
 
   res.json(fuelStocks);
 });
 
-// @desc    Get latest stock for each product
+// @desc    Get latest stock for each tank
 // @route   GET /api/stock/latest
 // @access  Private
 export const getLatestStocks = asyncHandler(async (req, res) => {
@@ -288,7 +182,6 @@ export const getLatestStocks = asyncHandler(async (req, res) => {
   ]);
 
   // Populate tank information
-  const TankConfig = mongoose.model("TankConfig");
   const populatedStocks = await TankConfig.populate(latestStocks, { path: 'tank' });
 
   res.json(populatedStocks);
@@ -298,40 +191,22 @@ export const getLatestStocks = asyncHandler(async (req, res) => {
 // @route   GET /api/stock/stats
 // @access  Private
 export const getFuelStockStats = asyncHandler(async (req, res) => {
-  const stats = await FuelStock.aggregate([
-    { $sort: { createdAt: -1 } },
-    {
-      $group: {
-        _id: "$product",
-        latestStock: { $first: "$closingStock" },
-        capacity: { $first: "$capacity" },
-        currentLevel: { $first: "$currentLevel" },
-        alert: { $first: "$alert" },
-      },
-    },
-    {
-      $project: {
-        product: "$_id",
-        closingStock: "$latestStock",
-        capacity: 1,
-        currentLevel: 1,
-        alert: 1,
-        _id: 0,
-      },
-    },
-  ]);
-
-  const totalCapacity = stats.reduce((sum, item) => sum + item.capacity, 0);
-  const totalCurrent = stats.reduce((sum, item) => sum + item.closingStock, 0);
-  const averageLevel = Math.round((totalCurrent / totalCapacity) * 100);
-  const lowStockAlerts = stats.filter((item) => item.alert).length;
+  // Get all tanks with current stock
+  const tanks = await TankConfig.find({ isActive: true })
+    .select('tankName product capacity currentStock currentLevel alert');
+  
+  const totalCapacity = tanks.reduce((sum, tank) => sum + tank.capacity, 0);
+  const totalCurrent = tanks.reduce((sum, tank) => sum + (tank.currentStock || 0), 0);
+  const averageLevel = totalCapacity > 0 ? Math.round((totalCurrent / totalCapacity) * 100) : 0;
+  const lowStockAlerts = tanks.filter(tank => tank.alert).length;
 
   res.json({
-    products: stats,
+    tanks,
     totalCapacity,
     totalCurrent,
     averageLevel,
     lowStockAlerts,
+    totalTanks: tanks.length
   });
 });
 
@@ -340,7 +215,9 @@ export const getFuelStockStats = asyncHandler(async (req, res) => {
 // @access  Private
 export const getFuelStock = asyncHandler(async (req, res) => {
   const fuelStock = await FuelStock.findById(req.params.id)
-    .populate("tank", "name capacity product currentStock");
+    .populate("tank", "tankName capacity product currentStock currentLevel")
+    .populate("purchaseReference", "invoiceNumber invoiceDate totalValue");
+    
   if (!fuelStock) {
     res.status(404);
     throw new Error("Fuel stock entry not found");
@@ -364,8 +241,21 @@ export const updateFuelStock = asyncHandler(async (req, res) => {
     { new: true, runValidators: true }
   );
 
-  // ✅ Check for low stock alerts
-  await handleLowStockAlert(updatedFuelStock);
+  // Update tank stock if this transaction affects stock levels
+  if (updatedFuelStock.tank && updatedFuelStock.newStock !== undefined) {
+    const tank = await TankConfig.findById(updatedFuelStock.tank);
+    if (tank) {
+      const currentLevel = Math.round((updatedFuelStock.newStock / tank.capacity) * 100);
+      const alert = currentLevel <= 20;
+      
+      await TankConfig.findByIdAndUpdate(updatedFuelStock.tank, {
+        currentStock: updatedFuelStock.newStock,
+        currentLevel: currentLevel,
+        alert: alert,
+        lastUpdated: new Date()
+      });
+    }
+  }
 
   res.json(updatedFuelStock);
 });
@@ -380,11 +270,18 @@ export const deleteFuelStock = asyncHandler(async (req, res) => {
     throw new Error("Fuel stock entry not found");
   }
 
+  // If it's a purchase transaction, also delete the linked purchase
+  if (fuelStock.purchaseReference) {
+    await Purchase.findByIdAndDelete(fuelStock.purchaseReference);
+  }
+
   await FuelStock.findByIdAndDelete(req.params.id);
+  
   res.json({ message: "Fuel stock entry removed successfully" });
 });
 
-// @desc    Create stock adjustment (REQUIRES AUDITOR APPROVAL FOR ALL TYPES)
+
+// @desc    Create stock adjustment (FIXED VALIDATION)
 // @route   POST /api/stock/adjustment
 // @access  Private
 export const createStockAdjustment = asyncHandler(async (req, res) => {
@@ -392,65 +289,90 @@ export const createStockAdjustment = asyncHandler(async (req, res) => {
   
   const { tank, adjustmentType, quantity, reason, dipReading, calculatedQuantity } = req.body;
 
-  // VALIDATION FOR STOCK ADJUSTMENT
-  if (!tank || !adjustmentType || !quantity || !reason) {
-    console.log("❌ Missing stock adjustment fields:", { tank, adjustmentType, quantity, reason });
+  // IMPROVED VALIDATION WITH BETTER ERROR MESSAGES
+  if (!tank) {
     res.status(400);
-    throw new Error("Please provide tank, adjustment type, quantity, and reason");
+    throw new Error("Tank selection is required");
+  }
+  
+  if (!adjustmentType) {
+    res.status(400);
+    throw new Error("Adjustment type is required");
+  }
+  
+  if (!quantity || quantity === "" || parseFloat(quantity) <= 0) {
+    res.status(400);
+    throw new Error("Valid quantity is required");
+  }
+  
+  if (!reason || reason.trim() === "") {
+    res.status(400);
+    throw new Error("Reason is required");
   }
 
   // Get tank details
-  const TankConfig = mongoose.model("TankConfig");
   const tankConfig = await TankConfig.findById(tank);
   if (!tankConfig) {
     console.log("❌ Tank not found:", tank);
     res.status(404);
-    throw new Error("Tank not found");
+    throw new Error("Selected tank not found");
   }
 
   const previousStock = tankConfig.currentStock || 0;
   let newStock = previousStock;
+  const quantityNum = parseFloat(quantity);
 
-  // Calculate what the new stock WOULD BE, but don't update actual stock yet
+  // Calculate what the new stock WOULD BE
   switch (adjustmentType) {
     case "addition":
-      newStock = previousStock + parseFloat(quantity);
+      newStock = previousStock + quantityNum;
       break;
     case "deduction":
-      newStock = previousStock - parseFloat(quantity);
+      newStock = previousStock - quantityNum;
       if (newStock < 0) {
         res.status(400);
-        throw new Error("Deduction quantity cannot exceed current stock");
+        throw new Error(`Deduction quantity (${quantityNum}L) exceeds current stock (${previousStock}L)`);
       }
       break;
     case "calibration":
     case "daily_update":
-      newStock = parseFloat(quantity);
+      newStock = quantityNum;
+      if (newStock < 0) {
+        res.status(400);
+        throw new Error("Calibration quantity cannot be negative");
+      }
+      if (newStock > tankConfig.capacity) {
+        res.status(400);
+        throw new Error(`Calibration quantity (${quantityNum}L) exceeds tank capacity (${tankConfig.capacity}L)`);
+      }
       break;
     default:
       res.status(400);
       throw new Error("Invalid adjustment type");
   }
 
-  // ALL adjustments now require auditor approval
+  // Validate capacity for additions
+  if (adjustmentType === "addition" && newStock > tankConfig.capacity) {
+    res.status(400);
+    throw new Error(`Addition would exceed tank capacity. Current: ${previousStock}L, Capacity: ${tankConfig.capacity}L, New total: ${newStock}L`);
+  }
+
+  // ALL adjustments require auditor approval
   const status = "Pending";
 
-  // Create stock adjustment record (PENDING APPROVAL)
+  // Create stock adjustment record
   const stockAdjustment = await StockAdjustment.create({
     tank,
     adjustmentType,
-    quantity: parseFloat(quantity),
+    quantity: quantityNum,
     dipReading: dipReading ? parseFloat(dipReading) : undefined,
     calculatedQuantity: calculatedQuantity ? parseFloat(calculatedQuantity) : undefined,
-    reason,
+    reason: reason.trim(),
     previousStock,
     newStock,
     adjustedBy: req.user._id,
-    status // Always pending for auditor approval
+    status
   });
-
-  // DO NOT create FuelStock record here - wait for auditor approval
-  // DO NOT update tank current stock here - wait for auditor approval
 
   console.log(`✅ Stock adjustment request created: ${stockAdjustment._id} (Status: ${stockAdjustment.status})`);
 
@@ -460,6 +382,32 @@ export const createStockAdjustment = asyncHandler(async (req, res) => {
     adjustment: stockAdjustment
   });
 });
+
+// @desc    Get tank configurations with safe defaults
+// @route   GET /api/tanks/config
+// @access  Private
+export const getTankConfigs = asyncHandler(async (req, res) => {
+  const tanks = await TankConfig.find({ isActive: true })
+    .select('tankName product capacity currentStock currentLevel alert isActive lastCalibrationBy createdAt updatedAt')
+    .sort({ tankName: 1 });
+  
+  // Ensure all tanks have required fields with safe defaults
+  const tanksWithDefaults = tanks.map(tank => ({
+    ...tank.toObject(),
+    currentStock: tank.currentStock || 0,
+    currentLevel: tank.currentLevel || 0,
+    alert: tank.alert || false
+  }));
+  
+  const isAdmin = req.user && req.user.role === "admin";
+  
+  res.json({
+    success: true,
+    tanks: tanksWithDefaults,
+    isAdmin
+  });
+});
+
 // @desc    Get stock adjustment history
 // @route   GET /api/stock/adjustments/history
 // @access  Private
@@ -478,7 +426,7 @@ export const getStockAdjustments = asyncHandler(async (req, res) => {
   }
 
   const adjustments = await StockAdjustment.find(query)
-    .populate("tank", "tankName product capacity") // Add tank population
+    .populate("tank", "tankName product capacity currentStock currentLevel")
     .populate("adjustedBy", "name email")
     .populate("approvedBy", "name email")
     .sort({ createdAt: -1 });
@@ -486,8 +434,9 @@ export const getStockAdjustments = asyncHandler(async (req, res) => {
   res.json(adjustments);
 });
 
-
-// In fuelStockController.js - Update getStockTransactions
+// @desc    Get stock transactions (FuelStock entries)
+// @route   GET /api/stock/transactions
+// @access  Private
 export const getStockTransactions = asyncHandler(async (req, res) => {
   const { tank, startDate, endDate, transactionType } = req.query;
 
@@ -507,7 +456,8 @@ export const getStockTransactions = asyncHandler(async (req, res) => {
 
   try {
     const transactions = await FuelStock.find(query)
-      .populate("tank", "tankName product capacity")
+      .populate("tank", "tankName product capacity currentStock currentLevel")
+      .populate("purchaseReference", "invoiceNumber invoiceDate totalValue")
       .sort({ date: -1, createdAt: -1 })
       .lean();
 
@@ -515,14 +465,14 @@ export const getStockTransactions = asyncHandler(async (req, res) => {
 
     // Transform the data with safe defaults
     const transformedTransactions = transactions.map(transaction => ({
-      _id: transaction._id?.toString() || `temp-${Date.now()}`,
-      tank: transaction.tank?._id?.toString() || transaction.tank?.toString() || "unknown",
+      _id: transaction._id?.toString(),
+      tank: transaction.tank?._id?.toString(),
       tankName: transaction.tank?.tankName || "Unknown Tank",
       product: transaction.product || transaction.tank?.product || "Unknown Product",
-      transactionType: transaction.transactionType || "adjustment",
-      quantity: transaction.quantity || 0,
-      previousStock: transaction.previousStock || 0,
-      newStock: transaction.newStock || 0,
+      transactionType: transaction.transactionType,
+      quantity: transaction.quantity,
+      previousStock: transaction.previousStock,
+      newStock: transaction.newStock,
       rate: transaction.ratePerLiter,
       amount: transaction.amount,
       supplier: transaction.supplier,
@@ -539,8 +489,6 @@ export const getStockTransactions = asyncHandler(async (req, res) => {
     throw new Error("Failed to fetch stock transactions");
   }
 });
-
-
 
 // @desc    Get stock adjustment statistics
 // @route   GET /api/stock/adjustments/stats
@@ -588,15 +536,16 @@ export const getAdjustmentStats = asyncHandler(async (req, res) => {
   });
 });
 
-
-// In fuelStockController.js - UPDATE createPurchase function
+// @desc    Create purchase (for other purchase types)
+// @route   POST /api/stock/purchase
+// @access  Private
+// In fuelStockController.js - UPDATE the createPurchase function
 export const createPurchase = asyncHandler(async (req, res) => {
   const {
     purchaseType,
     supplier,
     invoiceNumber,
     invoiceDate,
-    // Fuel purchase fields
     product,
     tank,
     purchaseQuantity,
@@ -606,14 +555,12 @@ export const createPurchase = asyncHandler(async (req, res) => {
     density,
     vat,
     otherCharges,
-    // GST fields
     taxableValue,
     cgst,
     sgst,
     igst,
     discount,
     totalValue,
-    // Asset fields
     assetName,
     assetCategory,
     assetDescription,
@@ -628,130 +575,158 @@ export const createPurchase = asyncHandler(async (req, res) => {
     throw new Error("Please provide all required fields: purchaseType, supplier, invoiceNumber, invoiceDate");
   }
 
-  // Check for duplicate invoice number
+  // Check for duplicate invoice number in Purchase collection only
   const existingPurchase = await Purchase.findOne({ invoiceNumber });
   if (existingPurchase) {
     res.status(400);
-    throw new Error("Invoice number already exists");
+    throw new Error("Invoice number already exists in purchase records");
   }
 
-  // Create purchase record
-  const purchaseData = {
-    purchaseType,
-    supplier,
-    invoiceNumber,
-    invoiceDate: new Date(invoiceDate),
-    totalValue: parseFloat(totalValue) || 0,
-    recordedBy: req.user._id,
-    notes
-  };
-
-  // Add type-specific fields
-  if (purchaseType === "fuel") {
-    Object.assign(purchaseData, {
-      product,
-      tank,
-      purchaseQuantity: parseFloat(purchaseQuantity) || 0,
-      purchaseValue: parseFloat(purchaseValue) || 0,
-      ratePerLiter: parseFloat(ratePerLiter) || 0,
-      vehicleNumber,
-      density: density ? parseFloat(density) : undefined,
-      vat: parseFloat(vat) || 0,
-      otherCharges: parseFloat(otherCharges) || 0
-    });
-  } else if (purchaseType === "lube") {
-    Object.assign(purchaseData, {
-      product: assetName, // Use assetName as product name for lube
-      taxableValue: parseFloat(taxableValue) || 0,
-      cgst: parseFloat(cgst) || 0,
-      sgst: parseFloat(sgst) || 0,
-      igst: parseFloat(igst) || 0,
-      discount: parseFloat(discount) || 0
-    });
-  } else if (purchaseType === "fixed-asset") {
-    Object.assign(purchaseData, {
-      assetName,
-      assetCategory,
-      assetDescription,
-      taxableValue: parseFloat(taxableValue) || 0,
-      cgst: parseFloat(cgst) || 0,
-      sgst: parseFloat(sgst) || 0,
-      igst: parseFloat(igst) || 0,
-      discount: parseFloat(discount) || 0
-    });
-  }
-
-  const purchase = await Purchase.create(purchaseData);
-
-  // For fuel purchases, also create FuelStock entry - UPDATED FOR NEW MODEL
-  if (purchaseType === "fuel") {
+  // ✅ FIX: For fuel purchases, handle everything in one transaction
+  if (purchaseType === "fuel" && tank) {
     try {
-      // Get tank details to calculate stock levels
       const tankConfig = await TankConfig.findById(tank);
       if (!tankConfig) {
+        res.status(404);
         throw new Error("Tank not found");
       }
 
-      const previousStock = tankConfig.currentStock || 0;
-      const newStock = previousStock + parseFloat(purchaseQuantity);
+      const currentStock = tankConfig.currentStock || 0;
+      const purchaseQty = parseFloat(purchaseQuantity) || 0;
+      const newStock = currentStock + purchaseQty;
+
+      console.log(`📊 Capacity Check: ${currentStock}L + ${purchaseQty}L = ${newStock}L / ${tankConfig.capacity}L`);
 
       // Validate capacity
       if (newStock > tankConfig.capacity) {
-        throw new Error(`Purchase quantity exceeds tank capacity. Current: ${previousStock}L, Capacity: ${tankConfig.capacity}L, New total would be: ${newStock}L`);
+        const availableSpace = tankConfig.capacity - currentStock;
+        res.status(400);
+        throw new Error(
+          `Purchase quantity exceeds available tank capacity. ` +
+          `Current: ${currentStock}L, Capacity: ${tankConfig.capacity}L, ` +
+          `Available: ${availableSpace}L, Required: ${purchaseQty}L`
+        );
       }
 
-      // Create FuelStock with NEW required fields
+      // ✅ STEP 1: Create FuelStock entry FIRST
+      const fuelStockInvoiceNumber = `${invoiceNumber}-${Date.now()}`;
+      
       const fuelStockData = {
         tank,
-        transactionType: "purchase", // REQUIRED
-        quantity: parseFloat(purchaseQuantity), // REQUIRED
-        previousStock: previousStock, // REQUIRED
-        newStock: newStock, // REQUIRED
-        product: product, // For purchases
-        purchaseQuantity: parseFloat(purchaseQuantity), // For purchases
-        purchaseValue: parseFloat(purchaseValue), // For purchases
-        ratePerLiter: parseFloat(ratePerLiter) || 0,
+        transactionType: "purchase",
+        quantity: purchaseQty,
+        previousStock: currentStock,
+        newStock: newStock,
+        product: product || tankConfig.product,
         amount: parseFloat(purchaseValue) || 0,
         supplier: supplier.trim(),
-        invoiceNumber: invoiceNumber.trim(),
+        invoiceNumber: fuelStockInvoiceNumber,
         vehicleNumber: vehicleNumber?.trim(),
         density: density ? parseFloat(density) : undefined,
-        date: new Date()
+        date: new Date(invoiceDate),
+        recordedBy: req.user._id
       };
 
-      console.log("💾 Creating FuelStock purchase with data:", fuelStockData);
-
+      console.log("💾 Creating FuelStock:", fuelStockData);
       const fuelStock = await FuelStock.create(fuelStockData);
 
-      // Update tank current stock
+      // ✅ STEP 2: Update tank current stock
+      const currentLevel = Math.round((newStock / tankConfig.capacity) * 100);
+      const alert = currentLevel <= 20;
+      
       await TankConfig.findByIdAndUpdate(tank, {
         currentStock: newStock,
-        currentLevel: Math.round((newStock / tankConfig.capacity) * 100),
-        alert: newStock / tankConfig.capacity <= 0.2,
+        currentLevel: currentLevel,
+        alert: alert,
         lastUpdated: new Date()
       });
+
+      console.log(`✅ Tank updated: ${tankConfig.tankName} -> ${newStock}L (${currentLevel}%)`);
+
+      // ✅ STEP 3: Create Purchase record with fuelStock reference
+      const purchaseData = {
+        purchaseType,
+        supplier,
+        invoiceNumber,
+        invoiceDate: new Date(invoiceDate),
+        totalValue: parseFloat(totalValue) || 0,
+        recordedBy: req.user._id,
+        notes,
+        // Fuel specific fields
+        product: product || tankConfig.product,
+        tank,
+        purchaseQuantity: purchaseQty,
+        purchaseValue: parseFloat(purchaseValue) || 0,
+        ratePerLiter: parseFloat(ratePerLiter) || 0,
+        vehicleNumber,
+        density: density ? parseFloat(density) : undefined,
+        vat: parseFloat(vat) || 0,
+        otherCharges: parseFloat(otherCharges) || 0,
+        // Link to fuel stock
+        fuelStockEntry: fuelStock._id
+      };
+
+      const purchase = await Purchase.create(purchaseData);
 
       res.status(201).json({
         message: "Fuel purchase recorded successfully",
         purchase,
-        fuelStock
+        fuelStock,
+        tankUpdate: {
+          currentStock: newStock,
+          currentLevel: currentLevel,
+          alert: alert
+        }
       });
 
-    } catch (fuelStockError) {
-      console.error("❌ FuelStock creation failed:", fuelStockError);
-      
-      // If FuelStock creation fails, delete the purchase record
-      await Purchase.findByIdAndDelete(purchase._id);
-      throw new Error(`Failed to create fuel stock: ${fuelStockError.message}`);
+    } catch (error) {
+      console.error("❌ Fuel purchase failed:", error);
+      // If anything fails, don't create partial records
+      throw new Error(`Fuel purchase failed: ${error.message}`);
     }
   } else {
+    // For non-fuel purchases (lube, fixed-asset)
+    const purchaseData = {
+      purchaseType,
+      supplier,
+      invoiceNumber,
+      invoiceDate: new Date(invoiceDate),
+      totalValue: parseFloat(totalValue) || 0,
+      recordedBy: req.user._id,
+      notes
+    };
+
+    // Add type-specific fields
+    if (purchaseType === "lube") {
+      Object.assign(purchaseData, {
+        product: assetName,
+        taxableValue: parseFloat(taxableValue) || 0,
+        cgst: parseFloat(cgst) || 0,
+        sgst: parseFloat(sgst) || 0,
+        igst: parseFloat(igst) || 0,
+        discount: parseFloat(discount) || 0
+      });
+    } else if (purchaseType === "fixed-asset") {
+      Object.assign(purchaseData, {
+        assetName,
+        assetCategory,
+        assetDescription,
+        taxableValue: parseFloat(taxableValue) || 0,
+        cgst: parseFloat(cgst) || 0,
+        sgst: parseFloat(sgst) || 0,
+        igst: parseFloat(igst) || 0,
+        discount: parseFloat(discount) || 0
+      });
+    }
+
+    const purchase = await Purchase.create(purchaseData);
+
     res.status(201).json({
       message: "Purchase recorded successfully",
       purchase
     });
   }
 });
-
 
 // @desc    Get all purchases with filters
 // @route   GET /api/purchases
@@ -786,7 +761,7 @@ export const getPurchases = asyncHandler(async (req, res) => {
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
   const purchases = await Purchase.find(query)
-    .populate("tank", "tankName capacity product")
+    .populate("tank", "tankName capacity product currentStock currentLevel")
     .populate("recordedBy", "name email")
     .sort({ invoiceDate: -1, createdAt: -1 })
     .skip(skip)
@@ -811,7 +786,7 @@ export const getPurchases = asyncHandler(async (req, res) => {
 // @access  Private
 export const getPurchaseById = asyncHandler(async (req, res) => {
   const purchase = await Purchase.findById(req.params.id)
-    .populate("tank", "tankName capacity product")
+    .populate("tank", "tankName capacity product currentStock currentLevel")
     .populate("recordedBy", "name email")
     .populate("approvedBy", "name email");
 
@@ -840,7 +815,6 @@ export const getTaxSummary = asyncHandler(async (req, res) => {
     startDate = new Date(now.getFullYear(), quarter * 3, 1);
     endDate = new Date(now.getFullYear(), (quarter + 1) * 3, 0);
   } else {
-    // Custom period or year
     startDate = new Date(now.getFullYear(), 0, 1);
     endDate = new Date(now.getFullYear(), 11, 31);
   }
@@ -905,7 +879,6 @@ export const deletePurchase = asyncHandler(async (req, res) => {
     throw new Error("Purchase not found");
   }
 
-  // If it's a fuel purchase, also delete the corresponding FuelStock entry
   if (purchase.purchaseType === "fuel") {
     await FuelStock.findOneAndDelete({ invoiceNumber: purchase.invoiceNumber });
   }
@@ -916,3 +889,42 @@ export const deletePurchase = asyncHandler(async (req, res) => {
     message: "Purchase deleted successfully" 
   });
 });
+
+// Helper: Generate or resolve low stock alerts
+const handleLowStockAlert = async (tankId) => {
+  try {
+    const tank = await TankConfig.findById(tankId);
+    if (!tank) return;
+
+    if (tank.currentLevel < 30) {
+      const existing = await Notification.findOne({
+        type: "Stock",
+        description: { $regex: tank.product, $options: "i" },
+        status: "Unread",
+      });
+
+      if (!existing) {
+        await Notification.create({
+          type: "Stock",
+          description: `${tank.product} stock below 30% in ${tank.tankName}`,
+          priority: tank.currentLevel < 15 ? "High" : "Medium",
+          status: "Unread",
+        });
+        console.log(`🔔 Low stock alert created for ${tank.product}`);
+      }
+    }
+
+    if (tank.currentLevel > 40) {
+      await Notification.updateMany(
+        {
+          type: "Stock",
+          description: { $regex: tank.product, $options: "i" },
+          status: "Unread",
+        },
+        { status: "Read" }
+      );
+    }
+  } catch (err) {
+    console.error("⚠️ Error handling stock alert:", err.message);
+  }
+};

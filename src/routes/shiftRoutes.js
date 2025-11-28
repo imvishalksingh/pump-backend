@@ -11,7 +11,9 @@ import {
   verifyShift,
   getShiftsByNozzleman,
   getActiveShift,
-  cancelShift
+  cancelShift,
+  getYesterdayReadings,
+  createManualShiftEntry,
 } from "../controllers/shiftController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -34,5 +36,8 @@ router.get("/", getShifts);
 router.get("/nozzleman/:nozzlemanId", getShiftsByNozzleman);
 router.get("/:id", getShift);
 router.put("/:id", updateShift);
+router.post("/manual-entry", authorize("supervisor", "admin"), createManualShiftEntry);
+router.get("/yesterday-readings/:nozzlemanId", getYesterdayReadings);
+
 
 export default router;

@@ -22,7 +22,8 @@ import {
   getTaxSummary,
   updatePurchaseStatus,
   deletePurchase,
-  createTankPurchase
+  createTankPurchase,
+  syncTankStocks
 } from "../controllers/fuelStockController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -40,10 +41,13 @@ router.put("/:id", updateFuelStock);
 router.delete("/:id", deleteFuelStock);
 
 // ===== STOCK ADJUSTMENT ROUTES =====
-// THESE SHOULD BE SEPARATE FROM PURCHASE VALIDATION
 router.post("/adjustment", createStockAdjustment);
 router.get("/adjustments/history", getStockAdjustments);
 router.get("/adjustments/stats", getAdjustmentStats);
+
+// ===== PURCHASE ROUTES =====
+router.post("/purchase/tank", createTankPurchase); // Use this simplified version
+router.post("/sync-tanks", syncTankStocks); // Add sync route
 
 // ===== PURCHASE ROUTES =====
 // THESE HAVE DIFFERENT VALIDATION (require product, purchaseValue, etc.)

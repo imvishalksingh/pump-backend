@@ -72,9 +72,7 @@ export const register = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc Login user
-// @route POST /api/auth/login
-// @access Public
+// In your authController.js - Update login function
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
@@ -86,7 +84,9 @@ export const login = asyncHandler(async (req, res) => {
   }
 
   // Find user and include password
-  const user = await User.findOne({ email }).select('+password');
+  const user = await User.findOne({ email })
+    .select('+password')
+    .populate('nozzlemanProfile'); // ADD THIS LINE
   
   if (!user) {
     console.log("No user found with email:", email);
@@ -110,6 +110,7 @@ export const login = asyncHandler(async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        nozzlemanProfile: user.nozzlemanProfile, // ADD THIS LINE
         token: generateToken(user._id, user.role),
       };
 
@@ -125,7 +126,6 @@ export const login = asyncHandler(async (req, res) => {
     throw new Error("Invalid email or password");
   }
 });
-
 // @desc Logout user
 // @route POST /api/auth/logout
 // @access Public

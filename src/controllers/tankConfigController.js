@@ -1,14 +1,13 @@
-// controllers/tankConfigController.js - UPDATED
+// controllers/tankConfigController.js
 import TankConfig from "../models/TankConfig.js";
+import FuelStock from "../models/FuelStock.js";
 import asyncHandler from "express-async-handler";
-import csv from "csv-parser";
-import stream from "stream";
 
 // @desc    Create tank configuration
 // @route   POST /api/tanks/config
 // @access  Private/Admin
 export const createTankConfig = asyncHandler(async (req, res) => {
-  const { tankName, product, capacity, tankShape, dimensions, calibrationTable } = req.body;
+  const { tankName, product, capacity } = req.body;
 
   if (!tankName || !product || !capacity) {
     res.status(400);
@@ -25,9 +24,10 @@ export const createTankConfig = asyncHandler(async (req, res) => {
     tankName,
     product,
     capacity,
-    tankShape: tankShape || "horizontal_cylinder",
-    dimensions: dimensions || {},
-    calibrationTable: calibrationTable || [],
+    currentStock: 0,
+    currentLevel: 0,
+    alert: false,
+    lastUpdated: new Date(),
     lastCalibrationBy: req.user?.name || "System"
   });
 
@@ -40,10 +40,18 @@ export const createTankConfig = asyncHandler(async (req, res) => {
 export const getTankConfigs = asyncHandler(async (req, res) => {
   const tanks = await TankConfig.find({ isActive: true }).sort({ tankName: 1 });
   
+  // Ensure all tanks have required fields
+  const tanksWithDefaults = tanks.map(tank => ({
+    ...tank.toObject(),
+    currentStock: tank.currentStock || 0,
+    currentLevel: tank.currentLevel || 0,
+    alert: tank.alert || false
+  }));
+  
   const isAdmin = req.user && req.user.role === "admin";
   
   res.json({
-    tanks,
+    tanks: tanksWithDefaults,
     isAdmin
   });
 });
@@ -73,24 +81,9 @@ export const updateTankConfig = asyncHandler(async (req, res) => {
     throw new Error("Tank configuration not found");
   }
 
-  const updateData = { ...req.body };
-  
-  if (req.body.dimensions) {
-    updateData.dimensions = {
-      ...tank.dimensions.toObject(),
-      ...req.body.dimensions
-    };
-  }
-
-  // Update calibration date if calibration table is modified
-  if (req.body.calibrationTable) {
-    updateData.calibrationDate = new Date();
-    updateData.lastCalibrationBy = req.user?.name || "System";
-  }
-
   const updatedTank = await TankConfig.findByIdAndUpdate(
     req.params.id,
-    updateData,
+    req.body,
     { 
       new: true, 
       runValidators: true
@@ -117,17 +110,98 @@ export const deleteTankConfig = asyncHandler(async (req, res) => {
   res.json({ message: "Tank configuration removed successfully" });
 });
 
-// In tankConfigController.js - UPDATE calculateDipQuantity with debugging
+// @desc    Initialize tank stocks (run this once)
+// @route   POST /api/tanks/config/initialize-stocks
+// @access  Private/Admin
+export const initializeTankStocks = asyncHandler(async (req, res) => {
+  const tanks = await TankConfig.find({});
+  
+  const results = await Promise.all(
+    tanks.map(async (tank) => {
+      // Get latest stock from FuelStock transactions
+      const latestStock = await FuelStock.findOne({ tank: tank._id })
+        .sort({ createdAt: -1 });
+      
+      const currentStock = latestStock ? latestStock.newStock : 0;
+      const currentLevel = Math.round((currentStock / tank.capacity) * 100);
+      const alert = currentLevel <= 20;
+      
+      return await TankConfig.findByIdAndUpdate(
+        tank._id,
+        {
+          currentStock: currentStock,
+          currentLevel: currentLevel,
+          alert: alert,
+          lastUpdated: new Date()
+        },
+        { new: true }
+      );
+    })
+  );
+
+  res.json({
+    message: "Tank stocks initialized successfully",
+    tanks: results
+  });
+});
+
+// @desc    Get tank status for debugging
+// @route   GET /api/tanks/config/debug/status
+// @access  Private
+export const getTankStatus = asyncHandler(async (req, res) => {
+  const tanks = await TankConfig.find({ isActive: true });
+  
+  const tankStatus = await Promise.all(
+    tanks.map(async (tank) => {
+      const latestStock = await FuelStock.findOne({ tank: tank._id })
+        .sort({ createdAt: -1 });
+      
+      return {
+        tankId: tank._id,
+        tankName: tank.tankName,
+        configStock: tank.currentStock,
+        configLevel: tank.currentLevel,
+        latestTransaction: latestStock ? {
+          newStock: latestStock.newStock,
+          type: latestStock.transactionType,
+          date: latestStock.createdAt
+        } : null,
+        discrepancy: latestStock ? (tank.currentStock !== latestStock.newStock) : false
+      };
+    })
+  );
+
+  res.json({
+    success: true,
+    tankStatus,
+    summary: {
+      totalTanks: tanks.length,
+      tanksWithDiscrepancy: tankStatus.filter(t => t.discrepancy).length
+    }
+  });
+});
+
+const calculateVolumeHSD = (dipReading) => {
+  const x = 1 - (dipReading / 100.0);
+  const volume = 671.8 * 10000.0 * (Math.acos(x) - (x * Math.sqrt(1 - x * x))) / 1000.0;
+  return volume;
+};
+
+const calculateVolumeMS = (dipReading) => {
+  const x = 1 - (dipReading / 100.0);
+  const volume = 496.8 * 10000.0 * (Math.acos(x) - (x * Math.sqrt(1 - x * x))) / 1000.0;
+  return volume;
+};
+
+// @desc    Calculate volume from dip reading
+// @route   POST /api/tanks/config/calculate
+// @access  Private
 export const calculateDipQuantity = asyncHandler(async (req, res) => {
   console.log("🎯 Calculate endpoint called with body:", JSON.stringify(req.body));
   
-  // Handle multiple possible parameter names
   const tankId = req.body.tankId || req.body.tank;
-  const dipMM = req.body.dipMM || req.body.dipReading;
-  
-  console.log("🔍 Extracted parameters:", { tankId, dipMM });
+  const dipReading = req.body.dipReading || req.body.dipMM;
 
-  // Validate required parameters
   if (!tankId) {
     return res.status(400).json({
       success: false,
@@ -135,18 +209,18 @@ export const calculateDipQuantity = asyncHandler(async (req, res) => {
     });
   }
 
-  if (dipMM === undefined || dipMM === null || dipMM === "") {
+  if (dipReading === undefined || dipReading === null || dipReading === "") {
     return res.status(400).json({
       success: false,
       error: "Dip reading is required"
     });
   }
 
-  const dipValue = parseFloat(dipMM);
+  const dipValue = parseFloat(dipReading);
   if (isNaN(dipValue) || dipValue < 0) {
     return res.status(400).json({
       success: false,
-      error: "Valid dip reading (in mm) is required"
+      error: "Valid dip reading (in centimeters) is required"
     });
   }
 
@@ -158,32 +232,31 @@ export const calculateDipQuantity = asyncHandler(async (req, res) => {
     });
   }
 
-  console.log("📊 Tank found:", {
-    name: tankConfig.tankName,
-    capacity: tankConfig.capacity,
-    calibrationPoints: tankConfig.calibrationTable?.length || 0
-  });
-
   try {
-    // Calculate volume using calibration table
-    const calculatedVolume = tankConfig.calculateVolumeFromDip(dipValue);
+    let calculatedVolume;
+    let formulaUsed;
     
-    console.log("✅ Calculation result:", {
-      dipMM: dipValue,
-      calculatedVolume: calculatedVolume,
-      tankCapacity: tankConfig.capacity
-    });
+    if (tankConfig.product === "HSD") {
+      calculatedVolume = calculateVolumeHSD(dipValue);
+      formulaUsed = "HSD Formula (671.8)";
+    } else if (tankConfig.product === "MS") {
+      calculatedVolume = calculateVolumeMS(dipValue);
+      formulaUsed = "MS Formula (496.8)";
+    } else {
+      throw new Error(`Unsupported product type: ${tankConfig.product}`);
+    }
     
     res.json({
       success: true,
-      dipMM: dipValue,
+      dipReading: dipValue,
       volumeLiters: parseFloat(calculatedVolume.toFixed(2)),
-      calculatedQuantity: parseFloat(calculatedVolume.toFixed(2)), // For frontend compatibility
+      calculatedQuantity: parseFloat(calculatedVolume.toFixed(2)),
       tankName: tankConfig.tankName,
       product: tankConfig.product,
       capacity: tankConfig.capacity,
       remainingPercentage: ((calculatedVolume / tankConfig.capacity) * 100).toFixed(1),
-      calibrationPointsUsed: tankConfig.calibrationTable?.length || 0
+      calculationMethod: "mathematical_formula",
+      formulaUsed: formulaUsed
     });
 
   } catch (error) {
@@ -193,101 +266,4 @@ export const calculateDipQuantity = asyncHandler(async (req, res) => {
       error: "Calculation error: " + error.message
     });
   }
-});
-// @desc    Upload calibration table via CSV
-// @route   POST /api/tanks/config/:id/upload-calibration
-// @access  Private/Admin
-export const uploadCalibrationCSV = asyncHandler(async (req, res) => {
-  if (!req.file) {
-    res.status(400);
-    throw new Error("CSV file is required");
-  }
-
-  const tank = await TankConfig.findById(req.params.id);
-  if (!tank) {
-    res.status(404);
-    throw new Error("Tank configuration not found");
-  }
-
-  const calibrationTable = [];
-  const bufferStream = new stream.PassThrough();
-  bufferStream.end(req.file.buffer);
-
-  return new Promise((resolve, reject) => {
-    bufferStream
-      .pipe(csv())
-      .on('data', (row) => {
-        const dipMM = parseFloat(row.dip || row.dipMM || row.mm);
-        const volumeLiters = parseFloat(row.liters || row.volume || row.volumeLiters);
-        
-        if (!isNaN(dipMM) && !isNaN(volumeLiters)) {
-          calibrationTable.push({
-            dipMM,
-            volumeLiters
-          });
-        }
-      })
-      .on('end', async () => {
-        try {
-          if (calibrationTable.length === 0) {
-            res.status(400);
-            throw new Error("No valid data found in CSV file");
-          }
-
-          tank.calibrationTable = calibrationTable;
-          tank.calibrationDate = new Date();
-          tank.lastCalibrationBy = req.user?.name || "CSV Upload";
-          
-          await tank.save();
-          
-          res.json({
-            message: `Calibration table updated with ${calibrationTable.length} entries`,
-            calibrationTable: tank.calibrationTable
-          });
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      })
-      .on('error', (error) => {
-        reject(error);
-      });
-  });
-});
-
-// @desc    Add single calibration point
-// @route   POST /api/tanks/config/:id/calibration
-// @access  Private/Admin
-export const addCalibrationPoint = asyncHandler(async (req, res) => {
-  const { dipMM, volumeLiters } = req.body;
-  
-  if (dipMM === undefined || volumeLiters === undefined) {
-    res.status(400);
-    throw new Error("Dip reading (mm) and volume (liters) are required");
-  }
-
-  const tank = await TankConfig.findById(req.params.id);
-  if (!tank) {
-    res.status(404);
-    throw new Error("Tank configuration not found");
-  }
-
-  // Remove existing point with same dipMM if exists
-  tank.calibrationTable = tank.calibrationTable.filter(point => point.dipMM !== dipMM);
-  
-  // Add new point
-  tank.calibrationTable.push({ dipMM, volumeLiters });
-  
-  // Sort by dipMM
-  tank.calibrationTable.sort((a, b) => a.dipMM - b.dipMM);
-  
-  tank.calibrationDate = new Date();
-  tank.lastCalibrationBy = req.user?.name || "Manual Entry";
-  
-  await tank.save();
-
-  res.json({
-    message: "Calibration point added successfully",
-    calibrationTable: tank.calibrationTable
-  });
 });

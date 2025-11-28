@@ -1,28 +1,24 @@
-// models/FuelStock.js - UPDATED FOR BOTH PURCHASES AND ADJUSTMENTS
+// models/FuelStock.js - FIXED VERSION
 import mongoose from "mongoose";
 
 const fuelStockSchema = new mongoose.Schema({
-  // TANK-CENTRIC: Always reference specific tank
   tank: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "TankConfig",
     required: [true, "Tank reference is required"]
   },
   
-  // TRANSACTION TYPE: Different validation for different types
   transactionType: {
     type: String,
     required: true,
     enum: ["purchase", "sale", "adjustment", "delivery"]
   },
   
-  // For ALL transaction types
   quantity: {
     type: Number,
     required: true
   },
   
-  // Stock levels before and after this transaction
   previousStock: {
     type: Number,
     required: true,
@@ -34,28 +30,17 @@ const fuelStockSchema = new mongoose.Schema({
     min: 0
   },
   
-  // For PURCHASES only
-  product: {
-    type: String,
-    enum: ["Petrol", "Diesel", "CNG"]
-    // Remove required - adjustments don't need product
-  },
-  purchaseQuantity: {
-    type: Number,
-    min: 0
-    // Remove required - adjustments don't have purchase quantity
-  },
-  purchaseValue: {
-    type: Number,
-    min: 0
-    // Remove required - adjustments don't have purchase value
-  },
-  ratePerLiter: {
-    type: Number,
-    min: 0
+  // Make purchaseReference optional
+  purchaseReference: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Purchase"
   },
   
-  // For ALL transaction types (optional)
+  product: {
+    type: String,
+    enum: ["MS", "HSD"]
+  },
+  
   amount: {
     type: Number,
     min: 0
@@ -67,13 +52,13 @@ const fuelStockSchema = new mongoose.Schema({
   invoiceNumber: {
     type: String,
     trim: true
+    // REMOVED: unique: true - This was causing the duplicate key error
   },
   reason: {
     type: String,
     trim: true
   },
   
-  // For purchases/deliveries
   vehicleNumber: {
     type: String,
     trim: true
@@ -86,35 +71,29 @@ const fuelStockSchema = new mongoose.Schema({
   date: {
     type: Date,
     default: Date.now
+  },
+  
+  recordedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User"
   }
 }, {
   timestamps: true
 });
 
-// CUSTOM VALIDATION: Different rules for different transaction types
+// FIXED VALIDATION: Remove strict purchaseReference requirement
 fuelStockSchema.pre("validate", function(next) {
   console.log(`🔍 Validating FuelStock transaction: ${this.transactionType}`);
   
-  // PURCHASE VALIDATION
+  // PURCHASE VALIDATION - Simplified
   if (this.transactionType === "purchase") {
-    if (!this.product) {
-      return next(new Error("Product name is required for purchases"));
-    }
-    if (!this.purchaseQuantity && this.purchaseQuantity !== 0) {
-      return next(new Error("Purchase quantity is required for purchases"));
-    }
-    if (!this.purchaseValue && this.purchaseValue !== 0) {
-      return next(new Error("Purchase value is required for purchases"));
-    }
-    if (!this.ratePerLiter && this.ratePerLiter !== 0) {
-      return next(new Error("Rate per liter is required for purchases"));
-    }
     if (!this.supplier) {
       return next(new Error("Supplier is required for purchases"));
     }
     if (!this.invoiceNumber) {
       return next(new Error("Invoice number is required for purchases"));
     }
+    // purchaseReference is now optional
   }
   
   // ADJUSTMENT VALIDATION
@@ -122,7 +101,6 @@ fuelStockSchema.pre("validate", function(next) {
     if (!this.reason) {
       return next(new Error("Reason is required for adjustments"));
     }
-    // Adjustments don't need product, purchaseQuantity, purchaseValue, etc.
   }
   
   next();
@@ -136,7 +114,7 @@ fuelStockSchema.post("save", async function() {
     
     if (tank) {
       const currentLevel = Math.round((this.newStock / tank.capacity) * 100);
-      const alert = currentLevel <= 20; // Alert if below 20%
+      const alert = currentLevel <= 20;
       
       await TankConfig.findByIdAndUpdate(this.tank, {
         currentStock: this.newStock,
@@ -152,10 +130,11 @@ fuelStockSchema.post("save", async function() {
   }
 });
 
-// Index for better performance
+// FIXED INDEXES: Remove unique index on invoiceNumber
 fuelStockSchema.index({ tank: 1, date: -1 });
 fuelStockSchema.index({ transactionType: 1 });
-fuelStockSchema.index({ invoiceNumber: 1 });
+fuelStockSchema.index({ purchaseReference: 1 });
+// REMOVED: fuelStockSchema.index({ invoiceNumber: 1 }); - This was causing the duplicate key error
 
 const FuelStock = mongoose.model("FuelStock", fuelStockSchema);
 export default FuelStock;

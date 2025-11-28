@@ -98,6 +98,10 @@ const shiftSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+     isManualEntry: {
+      type: Boolean,
+      default: false
+    },
     expenses: {
       type: Number,
       default: 0,

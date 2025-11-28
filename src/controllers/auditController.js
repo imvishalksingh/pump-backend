@@ -9,6 +9,7 @@ import AuditReport from "../models/Audit.js";
 import Notification from "../models/Notification.js";
 import asyncHandler from "express-async-handler";
 import mongoose from "mongoose";
+import TankConfig from "../models/TankConfig.js";
 
 // Helper: Generate or resolve low stock alerts - FIXED VERSION
 const handleLowStockAlert = async (stock) => {
@@ -356,7 +357,7 @@ export const getStockDiscrepancies = asyncHandler(async (req, res) => {
   }
 });
 
-// In auditController.js - UPDATE approveStockAdjustment to handle fuel stock update
+// In auditController.js - UPDATE approveStockAdjustment function
 export const approveStockAdjustment = asyncHandler(async (req, res) => {
   try {
     const { id } = req.params;
@@ -365,9 +366,9 @@ export const approveStockAdjustment = asyncHandler(async (req, res) => {
 
     console.log(`🔄 Processing stock adjustment: ${id}, Approved: ${approved}`);
 
-    // Find the adjustment
+    // Find the adjustment with proper population
     const adjustment = await StockAdjustment.findById(id)
-      .populate('tank', 'capacity tankName product');
+      .populate('tank');
     
     if (!adjustment) {
       return res.status(404).json({
@@ -391,7 +392,28 @@ export const approveStockAdjustment = asyncHandler(async (req, res) => {
 
     // ONLY if approved, update the actual fuel stock
     if (approved) {
-      await updateFuelStockFromAdjustment(adjustment);
+      try {
+        console.log('🔄 Starting fuel stock update process...');
+        await updateFuelStockFromAdjustment(adjustment);
+        
+        // Verify the update worked by fetching the updated tank
+        const updatedTank = await TankConfig.findById(adjustment.tank._id);
+        console.log(`✅ Verification - Tank ${updatedTank.tankName} now has: ${updatedTank.currentStock}L (${updatedTank.currentLevel}%)`);
+        
+      } catch (stockError) {
+        console.error("❌ Failed to update fuel stock:", stockError);
+        // Revert the adjustment status
+        adjustment.status = "Pending";
+        adjustment.approvedBy = undefined;
+        adjustment.approvalNotes = undefined;
+        adjustment.approvedAt = undefined;
+        await adjustment.save();
+        
+        return res.status(500).json({
+          message: `Failed to update tank stock: ${stockError.message}`,
+          error: stockError.message
+        });
+      }
     }
 
     // Create audit log
@@ -407,7 +429,8 @@ export const approveStockAdjustment = asyncHandler(async (req, res) => {
         adjustmentType: adjustment.adjustmentType,
         quantity: adjustment.quantity,
         previousStock: adjustment.previousStock,
-        newStock: adjustment.newStock
+        newStock: adjustment.newStock,
+        tankName: adjustment.tank?.tankName
       }
     });
 
@@ -415,7 +438,12 @@ export const approveStockAdjustment = asyncHandler(async (req, res) => {
 
     res.status(200).json({
       message: `Stock adjustment ${approved ? 'approved' : 'rejected'} successfully`,
-      adjustment
+      adjustment,
+      tankUpdated: approved ? {
+        tankName: adjustment.tank?.tankName,
+        newStock: adjustment.newStock,
+        newLevel: Math.round((adjustment.newStock / adjustment.tank?.capacity) * 100)
+      } : undefined
     });
 
   } catch (error) {
@@ -428,22 +456,21 @@ export const approveStockAdjustment = asyncHandler(async (req, res) => {
 });
 
 // Update the updateFuelStockFromAdjustment function to create FuelStock record
+// In auditController.js - UPDATE the updateFuelStockFromAdjustment function
+// In auditController.js - UPDATE the updateFuelStockFromAdjustment function
 const updateFuelStockFromAdjustment = async (adjustment) => {
   try {
-    const FuelStock = mongoose.model("FuelStock");
-    const TankConfig = mongoose.model("TankConfig");
-    
     console.log('🔄 Updating fuel stock for approved adjustment:', adjustment._id);
 
-    // Validate tank exists
+    // Validate tank exists - FIXED: Use the imported TankConfig model
     if (!adjustment.tank) {
       throw new Error("Tank not found in adjustment");
     }
 
-    // Get current tank stock
-    const tank = await TankConfig.findById(adjustment.tank._id);
+    // Get current tank state
+    const tank = await TankConfig.findById(adjustment.tank._id || adjustment.tank);
     if (!tank) {
-      throw new Error("Tank configuration not found");
+      throw new Error(`Tank configuration not found for ID: ${adjustment.tank._id || adjustment.tank}`);
     }
 
     const currentStock = tank.currentStock || 0;
@@ -455,18 +482,19 @@ const updateFuelStockFromAdjustment = async (adjustment) => {
     
     // Create FuelStock transaction record
     const fuelStockData = {
-      tank: adjustment.tank._id,
+      tank: tank._id,
       transactionType: "adjustment",
       quantity: quantity,
       previousStock: currentStock,
       newStock: adjustment.newStock,
-      product: adjustment.tank.product,
+      product: tank.product,
       ratePerLiter: 0,
       amount: 0,
       supplier: "System Adjustment - Auditor Approved",
       invoiceNumber: `ADJ-APPROVED-${Date.now()}`,
       reason: adjustment.reason,
-      date: new Date()
+      date: new Date(),
+      recordedBy: adjustment.adjustedBy
     };
 
     console.log('💾 Creating FuelStock record:', fuelStockData);
@@ -477,21 +505,24 @@ const updateFuelStockFromAdjustment = async (adjustment) => {
     const currentLevel = Math.round((adjustment.newStock / tank.capacity) * 100);
     const alert = currentLevel <= 20;
 
-    await TankConfig.findByIdAndUpdate(
-      adjustment.tank._id, 
+    console.log(`📈 Updating tank ${tank.tankName}: ${currentStock}L → ${adjustment.newStock}L (${currentLevel}%)`);
+
+    const updatedTank = await TankConfig.findByIdAndUpdate(
+      tank._id, 
       {
         currentStock: adjustment.newStock,
         currentLevel: currentLevel,
         alert: alert,
         lastUpdated: new Date()
-      }
+      },
+      { new: true } // Return the updated document
     );
 
-    console.log(`✅ Updated tank ${tank.tankName} stock to: ${adjustment.newStock}L`);
+    console.log(`✅ Updated tank ${updatedTank.tankName} stock to: ${updatedTank.currentStock}L`);
 
     // Trigger low stock alert handling
     await handleLowStockAlert({
-      product: adjustment.tank.product,
+      product: tank.product,
       currentLevel: currentLevel,
       closingStock: adjustment.newStock
     });
@@ -503,7 +534,6 @@ const updateFuelStockFromAdjustment = async (adjustment) => {
     throw error;
   }
 };
-
 
 
 export const getPendingSalesAudits = asyncHandler(async (req, res) => {
