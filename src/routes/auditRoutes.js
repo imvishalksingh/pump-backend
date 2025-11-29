@@ -11,7 +11,9 @@ import {
   getPendingSalesAudits,
   verifySalesTransaction,
   getAuditReport,
-  createAuditSignOff
+  createAuditSignOff,
+  getTankLevelsForAudit, 
+  adjustTankStock,
 } from '../controllers/auditController.js';
 import { protect, authorize } from '../middleware/authMiddleware.js';
 
@@ -39,6 +41,8 @@ router.post('/stock/adjustments/:id/approve', approveStockAdjustment);
 // Sales audit routes
 router.get('/sales/pending', getPendingSalesAudits);
 router.post('/sales/:id/verify', verifySalesTransaction);
+router.get("/tank-levels", getTankLevelsForAudit);
+router.post("/tanks/:id/adjust", adjustTankStock);
 
 // Audit report routes
 // router.get('/report', getAuditReport);

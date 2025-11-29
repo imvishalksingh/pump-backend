@@ -519,18 +519,20 @@ export const getNozzlemanSalesDetail = asyncHandler(async (req, res) => {
 });
 
 // FIXED createManualEntry function in nozzlemanSalesController.js
+// controllers/nozzlemanSalesController.js - UPDATED createManualEntry function
 export const createManualEntry = asyncHandler(async (req, res) => {
   try {
     const {
       nozzlemanId,
       date,
-      cashSales,        // This maps to cashCollected
+      cashSales,
       phonePeSales,    
       posSales,        
       creditSales,      
       expenses,
       cashDeposit,
       fuelDispensed,
+      testingFuel = 0, // ADD TESTING FUEL
       notes
     } = req.body;
 
@@ -546,7 +548,6 @@ export const createManualEntry = asyncHandler(async (req, res) => {
     }
 
     // For manual entries, we need to get a default pump and nozzle
-    // Let's get the first active pump and nozzle
     const Pump = mongoose.model("Pump");
     const Nozzle = mongoose.model("Nozzle");
     
@@ -568,14 +569,14 @@ export const createManualEntry = asyncHandler(async (req, res) => {
     const manualShift = await Shift.create({
       shiftId,
       nozzleman: nozzlemanId,
-      pump: defaultPump._id,           // Required field
-      nozzle: defaultNozzle._id,       // Required field
+      pump: defaultPump._id,
+      nozzle: defaultNozzle._id,
       startTime: new Date(`${date}T00:00:00`),
       endTime: new Date(`${date}T23:59:59`),
-      startReading: 0,                 // Required field
-      endReading: 0,                   // Set to 0 for manual entries
-      startReadingImage: "manual-entry", // Required field - dummy value
-      endReadingImage: "manual-entry",   // Dummy value
+      startReading: 0,
+      endReading: 0,
+      startReadingImage: "manual-entry",
+      endReadingImage: "manual-entry",
       cashCollected: parseFloat(cashSales) || 0,
       phonePeSales: parseFloat(phonePeSales) || 0,
       posSales: parseFloat(posSales) || 0,
@@ -584,13 +585,14 @@ export const createManualEntry = asyncHandler(async (req, res) => {
       cashDeposit: parseFloat(cashDeposit) || 0,
       cashInHand: (parseFloat(cashSales) || 0) - (parseFloat(expenses) || 0) - (parseFloat(cashDeposit) || 0),
       fuelDispensed: parseFloat(fuelDispensed) || 0,
-      status: "Approved",  // Manual entries are auto-approved
+      testingFuel: parseFloat(testingFuel) || 0, // ADD TESTING FUEL
+      status: "Approved",
       notes: notes || "Manual entry created by admin",
       auditNotes: "Auto-approved manual entry",
       auditedBy: req.user._id,
       auditedAt: new Date(),
-      createdBy: req.user._id,        // Required field
-      isManualEntry: true             // Custom flag to identify manual entries
+      createdBy: req.user._id,
+      isManualEntry: true
     });
 
     console.log("✅ Manual entry created:", manualShift._id);
@@ -620,7 +622,6 @@ export const createManualEntry = asyncHandler(async (req, res) => {
   } catch (error) {
     console.error("❌ Error creating manual entry:", error);
     
-    // More detailed error logging
     if (error.name === 'ValidationError') {
       console.error("Validation errors:", error.errors);
     }

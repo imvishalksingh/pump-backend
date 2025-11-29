@@ -1,4 +1,4 @@
-// routes/shiftRoutes.js - COMPLETE VERSION
+// routes/shiftRoutes.js - COMPLETE VERSION (NO CHANGES NEEDED)
 import express from "express";
 import {
   getShifts,
@@ -38,6 +38,5 @@ router.get("/:id", getShift);
 router.put("/:id", updateShift);
 router.post("/manual-entry", authorize("supervisor", "admin"), createManualShiftEntry);
 router.get("/yesterday-readings/:nozzlemanId", getYesterdayReadings);
-
 
 export default router;

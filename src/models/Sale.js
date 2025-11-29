@@ -1,4 +1,4 @@
-// models/Sale.js - UPDATED WITH STRICT POPULATE
+// models/Sale.js - UPDATED WITH TANK DEDUCTION
 import mongoose from "mongoose";
 
 const saleSchema = mongoose.Schema(
@@ -43,10 +43,26 @@ const saleSchema = mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    // NEW FIELDS FOR TANK DEDUCTION
+    fuelType: {
+      type: String,
+      enum: ["Petrol", "Diesel", "CNG"],
+      required: true
+    },
+    tankDeducted: {
+      type: Boolean,
+      default: false
+    },
+    tankReference: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "TankConfig"
+    },
+    deductionNotes: {
+      type: String
+    }
   },
   {
     timestamps: true,
-    // Add this to prevent population errors
     strictPopulate: false
   }
 );

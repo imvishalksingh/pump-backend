@@ -150,22 +150,40 @@ export const getSale = async (req, res) => {
 };
 
 // Create a new sale
+// In salesController.js - update createSale function
 export const createSale = async (req, res) => {
   try {
-    const { nozzle, product, customer, liters, price, paymentMode } = req.body;
+    const { nozzle, product, customer, liters, price, paymentMode, fuelType } = req.body;
 
-    // Optionally update customer balance if credit
+    // Get nozzle to determine fuel type if not provided
+    let actualFuelType = fuelType;
+    if (!actualFuelType && nozzle) {
+      const nozzleDoc = await Nozzle.findById(nozzle);
+      actualFuelType = nozzleDoc?.fuelType || "Petrol";
+    }
+
+    // Generate transaction ID
+    const count = await Sale.countDocuments();
+    const transactionId = `TXN-${String(count + 1).padStart(6, "0")}`;
+
     let newSale = await Sale.create({
+      transactionId,
       nozzle,
       product,
       customer,
       liters,
       price,
+      totalAmount: liters * price,
       paymentMode,
+      fuelType: actualFuelType, // ADD FUEL TYPE
       createdBy: req.user._id,
     });
 
-    res.status(201).json({ message: "Sale recorded successfully", sale: newSale });
+    res.status(201).json({ 
+      message: "Sale recorded successfully", 
+      sale: newSale,
+      note: "Tank will be automatically deducted when auditor verifies this sale"
+    });
   } catch (err) {
     res.status(500).json({ message: "Error creating sale", error: err.message });
   }

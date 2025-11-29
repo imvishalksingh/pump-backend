@@ -11,56 +11,56 @@ import asyncHandler from "express-async-handler";
 import mongoose from "mongoose";
 import TankConfig from "../models/TankConfig.js";
 
-// Helper: Generate or resolve low stock alerts - FIXED VERSION
-const handleLowStockAlert = async (stock) => {
-  try {
-    if (!stock?.product || stock.currentLevel === undefined) {
-      console.log('⚠️ Invalid stock data for alert handling:', stock);
-      return;
-    }
+// // Helper: Generate or resolve low stock alerts - FIXED VERSION
+// const handleLowStockAlert = async (stock) => {
+//   try {
+//     if (!stock?.product || stock.currentLevel === undefined) {
+//       console.log('⚠️ Invalid stock data for alert handling:', stock);
+//       return;
+//     }
 
-    console.log(`🔍 Checking stock alert for ${stock.product}: ${stock.currentLevel}%`);
+//     console.log(`🔍 Checking stock alert for ${stock.product}: ${stock.currentLevel}%`);
 
-    // If below 20% capacity -> create alert
-    if (stock.currentLevel <= 20) {
-      const existing = await Notification.findOne({
-        type: "Stock",
-        description: { $regex: stock.product, $options: "i" },
-        status: "Unread",
-      });
+//     // If below 20% capacity -> create alert
+//     if (stock.currentLevel <= 20) {
+//       const existing = await Notification.findOne({
+//         type: "Stock",
+//         description: { $regex: stock.product, $options: "i" },
+//         status: "Unread",
+//       });
 
-      if (!existing) {
-        await Notification.create({
-          type: "Stock",
-          description: `${stock.product} stock critically low at ${stock.currentLevel}%`,
-          priority: stock.currentLevel <= 10 ? "High" : "Medium",
-          status: "Unread",
-        });
-        console.log(`🔔 Low stock alert created for ${stock.product} at ${stock.currentLevel}%`);
-      } else {
-        console.log(`ℹ️ Low stock alert already exists for ${stock.product}`);
-      }
-    }
+//       if (!existing) {
+//         await Notification.create({
+//           type: "Stock",
+//           description: `${stock.product} stock critically low at ${stock.currentLevel}%`,
+//           priority: stock.currentLevel <= 10 ? "High" : "Medium",
+//           status: "Unread",
+//         });
+//         console.log(`🔔 Low stock alert created for ${stock.product} at ${stock.currentLevel}%`);
+//       } else {
+//         console.log(`ℹ️ Low stock alert already exists for ${stock.product}`);
+//       }
+//     }
 
-    // If refilled (> 30%) -> mark previous alerts as Read
-    if (stock.currentLevel > 30) {
-      const result = await Notification.updateMany(
-        {
-          type: "Stock",
-          description: { $regex: stock.product, $options: "i" },
-          status: "Unread",
-        },
-        { status: "Read" }
-      );
+//     // If refilled (> 30%) -> mark previous alerts as Read
+//     if (stock.currentLevel > 30) {
+//       const result = await Notification.updateMany(
+//         {
+//           type: "Stock",
+//           description: { $regex: stock.product, $options: "i" },
+//           status: "Unread",
+//         },
+//         { status: "Read" }
+//       );
       
-      if (result.modifiedCount > 0) {
-        console.log(`✅ Resolved ${result.modifiedCount} low stock alerts for ${stock.product}`);
-      }
-    }
-  } catch (err) {
-    console.error("⚠️ Error handling stock alert:", err.message);
-  }
-};
+//       if (result.modifiedCount > 0) {
+//         console.log(`✅ Resolved ${result.modifiedCount} low stock alerts for ${stock.product}`);
+//       }
+//     }
+//   } catch (err) {
+//     console.error("⚠️ Error handling stock alert:", err.message);
+//   }
+// };
 // @desc    Get auditor dashboard statistics
 // @route   GET /api/audit/stats
 // @access  Private (Auditor)
@@ -129,6 +129,8 @@ export const getAuditorStats = asyncHandler(async (req, res) => {
     throw new Error("Failed to fetch auditor statistics");
   }
 });
+
+
 
 // @desc    Get pending shifts for approval
 // @route   GET /api/audit/shifts/pending
@@ -561,14 +563,19 @@ export const getPendingSalesAudits = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Verify sales transaction
+// ADD TO auditController.js
+
+// @desc    Verify sales transaction with automatic tank deduction
 // @route   POST /api/audit/sales/:id/verify
 // @access  Private (Auditor)
 export const verifySalesTransaction = asyncHandler(async (req, res) => {
   const { approved, notes } = req.body;
 
   try {
-    const salesTransaction = await Sale.findById(req.params.id);
+    const salesTransaction = await Sale.findById(req.params.id)
+      .populate("nozzle", "fuelType")
+      .populate("shift", "nozzleman pump");
+
     if (!salesTransaction) {
       res.status(404);
       throw new Error("Sales transaction not found");
@@ -576,6 +583,13 @@ export const verifySalesTransaction = asyncHandler(async (req, res) => {
 
     if (approved) {
       salesTransaction.verifiedBy = req.user._id;
+      
+      // ✅ AUTOMATIC TANK DEDUCTION WHEN VERIFIED
+      if (!salesTransaction.tankDeducted) {
+        await deductFuelFromTankForSale(salesTransaction);
+        salesTransaction.tankDeducted = true;
+        salesTransaction.deductionNotes = "Automatically deducted upon auditor verification";
+      }
     } else {
       // Mark as rejected
       salesTransaction.auditStatus = "Rejected";
@@ -591,17 +605,19 @@ export const verifySalesTransaction = asyncHandler(async (req, res) => {
       entityId: salesTransaction._id,
       entityName: `Sales Transaction ${salesTransaction.transactionId}`,
       performedBy: req.user._id,
-      notes: notes || (approved ? "Sales transaction verified" : "Sales transaction rejected"),
+      notes: notes || (approved ? "Sales transaction verified with automatic tank deduction" : "Sales transaction rejected"),
       details: {
         amount: salesTransaction.totalAmount,
         liters: salesTransaction.liters,
-        fuelType: salesTransaction.nozzle?.fuelType
+        fuelType: salesTransaction.fuelType,
+        tankDeducted: approved ? true : false
       }
     });
 
     res.json({
       message: `Sales transaction ${approved ? "verified" : "rejected"} successfully`,
-      salesTransaction
+      salesTransaction,
+      tankDeducted: approved
     });
   } catch (error) {
     console.error("Error verifying sales transaction:", error);
@@ -609,6 +625,93 @@ export const verifySalesTransaction = asyncHandler(async (req, res) => {
     throw new Error("Failed to verify sales transaction");
   }
 });
+
+// ✅ NEW FUNCTION: Deduct fuel from tank for verified sales
+const deductFuelFromTankForSale = async (sale) => {
+  try {
+    console.log(`🔄 Starting automatic tank deduction for sale ${sale.transactionId}`);
+    
+    const fuelType = sale.fuelType;
+    const fuelLiters = sale.liters;
+
+    console.log(`⛽ Fuel deduction for sale: ${fuelLiters}L of ${fuelType}`);
+
+    // Find the tank configuration for this fuel type
+    const TankConfig = mongoose.model("TankConfig");
+    const tank = await TankConfig.findOne({ 
+      product: fuelType === "Petrol" ? "MS" : "HSD",
+      isActive: true 
+    });
+    
+    if (!tank) {
+      throw new Error(`Active tank configuration not found for fuel type: ${fuelType}`);
+    }
+
+    console.log(`📦 Found tank: ${tank.tankName}, Current stock: ${tank.currentStock}L`);
+
+    // Calculate new stock
+    const previousStock = tank.currentStock || 0;
+    const newStock = Math.max(0, previousStock - fuelLiters);
+    const currentLevel = Math.round((newStock / tank.capacity) * 100);
+    const alert = currentLevel <= 20;
+
+    console.log(`📊 Tank update: ${previousStock}L - ${fuelLiters}L = ${newStock}L (${currentLevel}%)`);
+
+    // Update tank
+    const updatedTank = await TankConfig.findByIdAndUpdate(
+      tank._id,
+      {
+        currentStock: newStock,
+        currentLevel: currentLevel,
+        alert: alert,
+        lastUpdated: new Date()
+      },
+      { new: true }
+    );
+
+    // Create FuelStock record for the sale deduction
+    const FuelStock = mongoose.model("FuelStock");
+    await FuelStock.create({
+      tank: tank._id,
+      transactionType: "sale",
+      quantity: -fuelLiters, // Negative for deduction
+      previousStock: previousStock,
+      newStock: newStock,
+      product: tank.product,
+      ratePerLiter: sale.price,
+      amount: sale.totalAmount,
+      saleReference: sale._id,
+      shift: sale.shift?._id,
+      nozzleman: sale.shift?.nozzleman,
+      reason: `Automatic deduction from verified sale ${sale.transactionId}`,
+      date: new Date(),
+      recordedBy: sale.verifiedBy
+    });
+
+    // Update sale with tank reference
+    await Sale.findByIdAndUpdate(sale._id, {
+      tankReference: tank._id
+    });
+
+    console.log(`✅ Successfully deducted ${fuelLiters}L from tank ${tank.tankName}`);
+    console.log(`📈 New tank stock: ${updatedTank.currentStock}L (${updatedTank.currentLevel}%)`);
+
+    // Trigger low stock alert if needed
+    if (currentLevel <= 20) {
+      await handleLowStockAlert({
+        product: tank.product,
+        currentLevel: currentLevel,
+        closingStock: newStock
+      });
+    }
+
+    return updatedTank;
+
+  } catch (error) {
+    console.error("❌ Error in deductFuelFromTankForSale:", error);
+    throw error;
+  }
+};
 
 // @desc    Get audit report
 // @route   GET /api/audit/report
@@ -804,5 +907,170 @@ const checkStockDiscrepancies = async () => {
   } catch (error) {
     console.error("Error checking stock discrepancies:", error);
     return 0;
+  }
+};
+
+
+
+
+
+// controllers/auditController.js - ADD THESE FUNCTIONS
+
+// @desc    Get tank stock levels for audit
+// @route   GET /api/audit/tank-levels
+// @access  Private (Auditor)
+export const getTankLevelsForAudit = asyncHandler(async (req, res) => {
+  try {
+    const TankConfig = mongoose.model("TankConfig");
+    const tanks = await TankConfig.find({})
+      .select('tankName product capacity currentStock currentLevel alert lastUpdated')
+      .sort({ product: 1 });
+
+    console.log(`📊 Found ${tanks.length} tanks for audit`);
+
+    res.json({
+      tanks,
+      summary: {
+        totalTanks: tanks.length,
+        lowStockTanks: tanks.filter(tank => tank.alert).length,
+        totalCapacity: tanks.reduce((sum, tank) => sum + tank.capacity, 0),
+        totalCurrentStock: tanks.reduce((sum, tank) => sum + tank.currentStock, 0)
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching tank levels:", error);
+    res.status(500);
+    throw new Error("Failed to fetch tank levels for audit");
+  }
+});
+
+// @desc    Adjust tank stock manually (for discrepancies)
+// @route   POST /api/audit/tanks/:id/adjust
+// @access  Private (Auditor)
+export const adjustTankStock = asyncHandler(async (req, res) => {
+  try {
+    const { adjustment, reason, notes } = req.body;
+    const auditorId = req.user._id;
+
+    console.log(`🔄 Manual tank adjustment request:`, { adjustment, reason });
+
+    const TankConfig = mongoose.model("TankConfig");
+    const tank = await TankConfig.findById(req.params.id);
+    
+    if (!tank) {
+      return res.status(404).json({
+        message: "Tank not found"
+      });
+    }
+
+    const previousStock = tank.currentStock;
+    const newStock = Math.max(0, previousStock + parseFloat(adjustment));
+    const currentLevel = Math.round((newStock / tank.capacity) * 100);
+    const alert = currentLevel <= 20;
+
+    console.log(`📊 Tank adjustment: ${tank.tankName} - ${previousStock}L + ${adjustment}L = ${newStock}L`);
+
+    // Update tank
+    const updatedTank = await TankConfig.findByIdAndUpdate(
+      tank._id,
+      {
+        currentStock: newStock,
+        currentLevel: currentLevel,
+        alert: alert,
+        lastUpdated: new Date()
+      },
+      { new: true }
+    );
+
+    // Create FuelStock record for manual adjustment
+    const FuelStock = mongoose.model("FuelStock");
+    await FuelStock.create({
+      tank: tank._id,
+      transactionType: "manual_adjustment",
+      quantity: parseFloat(adjustment),
+      previousStock: previousStock,
+      newStock: newStock,
+      product: tank.product,
+      ratePerLiter: 0,
+      amount: 0,
+      auditor: auditorId,
+      reason: reason || "Manual adjustment by auditor",
+      notes: notes,
+      date: new Date(),
+      recordedBy: auditorId
+    });
+
+    // Create audit log
+    const AuditLog = mongoose.model("AuditLog");
+    await AuditLog.create({
+      action: "adjusted",
+      entityType: "TankStock",
+      entityId: tank._id,
+      entityName: `Tank ${tank.tankName}`,
+      performedBy: auditorId,
+      notes: `Manual stock adjustment: ${adjustment}L. ${notes || ''}`,
+      details: {
+        product: tank.product,
+        adjustment: parseFloat(adjustment),
+        previousStock: previousStock,
+        newStock: newStock,
+        reason: reason
+      }
+    });
+
+    // Trigger low stock alert if needed
+    if (currentLevel <= 20) {
+      await handleLowStockAlert({
+        product: tank.product,
+        currentLevel: currentLevel,
+        closingStock: newStock
+      });
+    }
+
+    res.status(200).json({
+      message: "Tank stock adjusted successfully",
+      adjustment: {
+        tankName: updatedTank.tankName,
+        product: updatedTank.product,
+        adjustment: parseFloat(adjustment),
+        previousStock: previousStock,
+        newStock: updatedTank.currentStock,
+        newLevel: updatedTank.currentLevel
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error adjusting tank stock:", error);
+    res.status(500).json({
+      message: "Failed to adjust tank stock",
+      error: error.message
+    });
+  }
+});
+
+// ✅ Add this to your existing helper functions in auditController.js
+const handleLowStockAlert = async (stock) => {
+  try {
+    const Notification = mongoose.model("Notification");
+    
+    if (stock.currentLevel <= 20) {
+      const existing = await Notification.findOne({
+        type: "Stock",
+        description: { $regex: stock.product, $options: "i" },
+        status: "Unread",
+      });
+
+      if (!existing) {
+        await Notification.create({
+          type: "Stock",
+          description: `${stock.product} stock critically low at ${stock.currentLevel}%`,
+          priority: stock.currentLevel <= 10 ? "High" : "Medium",
+          status: "Unread",
+        });
+        console.log(`🔔 Low stock alert created for ${stock.product} at ${stock.currentLevel}%`);
+      }
+    }
+  } catch (err) {
+    console.error("⚠️ Error handling stock alert:", err.message);
   }
 };

@@ -1,3 +1,4 @@
+// models/Shift.js - UPDATED
 import mongoose from "mongoose";
 
 const shiftSchema = mongoose.Schema(
@@ -10,7 +11,6 @@ const shiftSchema = mongoose.Schema(
     assignment: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Assignment",
-      // required: true,
     },
     nozzleman: {
       type: mongoose.Schema.Types.ObjectId,
@@ -43,13 +43,18 @@ const shiftSchema = mongoose.Schema(
     },
     // Reading proof images
     startReadingImage: {
-      type: String, // URL to stored image
+      type: String,
       required: true,
     },
     endReadingImage: {
-      type: String, // URL to stored image
+      type: String,
     },
     fuelDispensed: {
+      type: Number,
+      default: 0,
+    },
+    // ADD TESTING FUEL FIELD
+    testingFuel: {
       type: Number,
       default: 0,
     },
@@ -98,7 +103,7 @@ const shiftSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
-     isManualEntry: {
+    isManualEntry: {
       type: Boolean,
       default: false
     },

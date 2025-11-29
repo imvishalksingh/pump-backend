@@ -1,10 +1,177 @@
-// controllers/shiftController.js - COMPLETE VERSION
+// controllers/shiftController.js - COMPLETE UPDATED VERSION WITH TANK DEDUCTION
 import Shift from "../models/Shift.js";
 import Nozzle from "../models/Nozzle.js";
 import Nozzleman from "../models/NozzleMan.js";
 import Assignment from "../models/Assignment.js";
 import CashHandover from "../models/CashHandover.js";
 import asyncHandler from "express-async-handler";
+import mongoose from "mongoose";
+import Pump from "../models/Pump.js";
+import TankConfig from "../models/TankConfig.js";
+
+
+// // In shiftController.js - UPDATED VERSION
+// const deductFuelFromTank = async (fuelType, amount) => {
+//   try {
+//     console.log(`⛽ Looking for tank configuration for fuel type: ${fuelType}`);
+    
+//     // Validate that fuelType is a string
+//     if (typeof fuelType !== 'string') {
+//       console.error('❌ Invalid fuel type received:', fuelType);
+//       throw new Error(`Invalid fuel type format. Expected string, got: ${typeof fuelType}`);
+//     }
+    
+//     // Map fuel types to tank products
+//     const fuelTypeToProductMap = {
+//       "Petrol": "MS",
+//       "Diesel": "HSD", 
+//       "CNG": "CNG"
+//     };
+    
+//     const product = fuelTypeToProductMap[fuelType];
+    
+//     if (!product) {
+//       throw new Error(`Unsupported fuel type: ${fuelType}`);
+//     }
+    
+//     console.log(`🔍 Mapped ${fuelType} to product: ${product}`);
+    
+//     // Find active tank for this product
+//     const tankConfig = await TankConfig.findOne({ 
+//       product: product,
+//       isActive: true 
+//     });
+    
+//     if (!tankConfig) {
+//       throw new Error(`Tank configuration not found for fuel type: ${fuelType} (product: ${product})`);
+//     }
+    
+//     console.log(`✅ Found tank: ${tankConfig.tankName} with current stock: ${tankConfig.currentStock}`);
+    
+//     // Check if enough fuel in tank
+//     if (tankConfig.currentStock < amount) {
+//       throw new Error(`Insufficient fuel in ${fuelType} tank. Available: ${tankConfig.currentStock}, Required: ${amount}`);
+//     }
+    
+//     // Deduct fuel from tank
+//     const previousStock = tankConfig.currentStock;
+//     tankConfig.currentStock -= amount;
+//     tankConfig.currentLevel = Math.round((tankConfig.currentStock / tankConfig.capacity) * 100);
+//     tankConfig.alert = tankConfig.currentLevel <= 20;
+//     tankConfig.lastUpdated = new Date();
+    
+//     await tankConfig.save();
+    
+//     console.log(`✅ Fuel deducted: ${amount}L from ${tankConfig.tankName}. New stock: ${tankConfig.currentStock}`);
+    
+//     return tankConfig;
+    
+//   } catch (error) {
+//     console.error(`❌ Error in deductFuelFromTank for ${fuelType}:`, error.message);
+//     throw error;
+//   }
+// };
+// ✅ Add this helper function for low stock alerts
+const handleLowStockAlert = async (stock) => {
+  try {
+    const Notification = mongoose.model("Notification");
+    
+    if (stock.currentLevel <= 20) {
+      const existing = await Notification.findOne({
+        type: "Stock",
+        description: { $regex: stock.product, $options: "i" },
+        status: "Unread",
+      });
+
+      if (!existing) {
+        await Notification.create({
+          type: "Stock",
+          description: `${stock.product} stock critically low at ${stock.currentLevel}%`,
+          priority: stock.currentLevel <= 10 ? "High" : "Medium",
+          status: "Unread",
+        });
+        console.log(`🔔 Low stock alert created for ${stock.product} at ${stock.currentLevel}%`);
+      }
+    }
+  } catch (err) {
+    console.error("⚠️ Error handling stock alert:", err.message);
+  }
+};
+
+// ✅ NEW FUNCTION: Adjust tank based on auditor's final verification
+const adjustTankForAuditor = async (shift, adjustment) => {
+  try {
+    console.log(`🔄 Processing auditor tank adjustment: ${adjustment}L`);
+    
+    // Get nozzle fuel type
+    const nozzle = await Nozzle.findById(shift.nozzle);
+    const fuelType = nozzle.fuelType;
+
+    // Find the tank configuration
+    const TankConfig = mongoose.model("TankConfig");
+    const tank = await TankConfig.findOne({ product: fuelType });
+    
+    if (!tank) {
+      throw new Error(`Tank configuration not found for fuel type: ${fuelType}`);
+    }
+
+    console.log(`📦 Current tank stock before adjustment: ${tank.currentStock}L`);
+
+    // Calculate new stock (adjustment can be positive or negative)
+    const newStock = Math.max(0, tank.currentStock - adjustment); // Subtract adjustment because it's additional deduction
+    const currentLevel = Math.round((newStock / tank.capacity) * 100);
+    const alert = currentLevel <= 20;
+
+    console.log(`📊 Auditor tank adjustment: ${tank.currentStock}L - ${adjustment}L = ${newStock}L`);
+
+    // Update tank
+    const updatedTank = await TankConfig.findByIdAndUpdate(
+      tank._id,
+      {
+        currentStock: newStock,
+        currentLevel: currentLevel,
+        alert: alert,
+        lastUpdated: new Date()
+      },
+      { new: true }
+    );
+
+    // Create FuelStock record for auditor adjustment
+    const FuelStock = mongoose.model("FuelStock");
+    await FuelStock.create({
+      tank: tank._id,
+      transactionType: "auditor_adjustment",
+      quantity: -adjustment, // Negative for deduction
+      previousStock: tank.currentStock,
+      newStock: newStock,
+      product: tank.product,
+      ratePerLiter: 0,
+      amount: 0,
+      shift: shift._id,
+      auditor: shift.auditedBy,
+      reason: `Auditor final adjustment for shift ${shift.shiftId}`,
+      date: new Date(),
+      recordedBy: shift.auditedBy
+    });
+
+    console.log(`✅ Auditor adjustment completed. New tank stock: ${updatedTank.currentStock}L`);
+
+    // Trigger low stock alert if needed
+    if (currentLevel <= 20) {
+      await handleLowStockAlert({
+        product: tank.product,
+        currentLevel: currentLevel,
+        closingStock: newStock
+      });
+    }
+
+    return updatedTank;
+
+  } catch (error) {
+    console.error("❌ Error in adjustTankForAuditor:", error);
+    throw error;
+  }
+};
 
 // @desc    Get all shifts with filters
 // @route   GET /api/shifts
@@ -397,11 +564,11 @@ export const startShift = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    End shift
-// @route   PUT /api/shifts/end/:id
-// @access  Private
+// controllers/shiftController.js - COMPLETE FIXED endShift FUNCTION
+// controllers/shiftController.js - FIXED endShift WITHOUT TRANSACTIONS
 export const endShift = asyncHandler(async (req, res) => {
   try {
+    const { id } = req.params;
     const { 
       endReading, 
       endReadingImage, 
@@ -412,115 +579,269 @@ export const endShift = asyncHandler(async (req, res) => {
       creditSales = 0,
       expenses = 0,
       cashDeposit = 0,
-      meterReadingHSD = { opening: 0, closing: 0 },
-      meterReadingPetrol = { opening: 0, closing: 0 },
-      notes 
+      notes = '',
+      testingFuel = 0
     } = req.body;
 
-    console.log("🔍 Ending shift:", req.params.id);
-    console.log("💰 Cash collected:", cashCollected);
+    console.log(`🔄 Ending shift: ${id}`);
+    console.log('📊 End shift data:', { 
+      endReading, 
+      cashCollected, 
+      phonePeSales, 
+      posSales, 
+      creditSales,
+      expenses,
+      testingFuel 
+    });
 
-    const shift = await Shift.findById(req.params.id);
+    // Validate required fields
+    if (!endReading || endReading < 0) {
+      res.status(400);
+      throw new Error('Valid end reading is required');
+    }
+
+    // Find shift
+    const shift = await Shift.findById(id)
+      .populate('nozzle', 'number fuelType pump')
+      .populate('pump', 'name location fuelType');
+
     if (!shift) {
       res.status(404);
-      throw new Error("Shift not found");
+      throw new Error('Shift not found');
     }
 
-    if (shift.status !== "Active") {
+    if (shift.status === 'Completed') {
       res.status(400);
-      throw new Error("Shift is not active");
+      throw new Error('Shift already completed');
     }
 
-    if (endReading === undefined || !endReadingImage) {
+    // Validate end reading is greater than start reading
+    if (endReading <= shift.startReading) {
       res.status(400);
-      throw new Error("Please provide end reading and reading proof image");
+      throw new Error('End reading must be greater than start reading');
     }
 
-    const fuelDispensed = parseFloat(endReading) - shift.startReading;
+    // Calculate fuel dispensed
+    const fuelDispensed = endReading - shift.startReading;
+    const finalFuelDispensed = fuelDispensed - testingFuel;
 
-    if (fuelDispensed < 0) {
+    if (finalFuelDispensed < 0) {
       res.status(400);
-      throw new Error("End reading cannot be less than start reading");
+      throw new Error('Testing fuel cannot exceed total fuel dispensed');
     }
 
-    // Update shift with all data
-    shift.endTime = new Date();
-    shift.endReading = parseFloat(endReading);
-    shift.endReadingImage = endReadingImage;
-    shift.fuelDispensed = fuelDispensed;
-    shift.cashCollected = parseFloat(cashCollected) || 0;
-    shift.phonePeSales = parseFloat(phonePeSales) || 0;
-    shift.posSales = parseFloat(posSales) || 0;
-    shift.otpSales = parseFloat(otpSales) || 0;
-    shift.creditSales = parseFloat(creditSales) || 0;
-    shift.expenses = parseFloat(expenses) || 0;
-    shift.cashDeposit = parseFloat(cashDeposit) || 0;
-    shift.meterReadingHSD = meterReadingHSD;
-    shift.meterReadingPetrol = meterReadingPetrol;
-    shift.notes = notes || "";
-    shift.status = "Pending Approval";
+    // GET FUEL TYPE CORRECTLY
+    let fuelType;
+    if (shift.nozzle && shift.nozzle.fuelType) {
+      fuelType = shift.nozzle.fuelType; // This should be 'Petrol', 'Diesel', or 'CNG'
+    } else if (shift.pump && shift.pump.fuelType) {
+      fuelType = shift.pump.fuelType;
+    } else {
+      fuelType = 'Petrol'; // Default fallback
+    }
+
+    console.log(`⛽ Fuel Calculation:`, {
+      startReading: shift.startReading,
+      endReading: endReading,
+      rawFuelDispensed: fuelDispensed,
+      testingFuel: testingFuel,
+      finalFuelDispensed: finalFuelDispensed,
+      fuelType: fuelType
+    });
 
     // Calculate cash in hand
-    const totalSales = shift.cashCollected + shift.phonePeSales + shift.posSales + shift.otpSales + shift.creditSales;
-    shift.cashInHand = totalSales - shift.expenses - shift.cashDeposit;
+    const totalNonCashSales = phonePeSales + posSales + otpSales + creditSales;
+    const cashInHand = cashCollected - cashDeposit - expenses;
 
-    const updatedShift = await shift.save();
+    // Update shift with end details
+    shift.endTime = new Date();
+    shift.endReading = endReading;
+    shift.endReadingImage = endReadingImage;
+    shift.cashCollected = cashCollected;
+    shift.phonePeSales = phonePeSales;
+    shift.posSales = posSales;
+    shift.otpSales = otpSales;
+    shift.creditSales = creditSales;
+    shift.expenses = expenses;
+    shift.cashDeposit = cashDeposit;
+    shift.cashInHand = cashInHand;
+    shift.fuelDispensed = finalFuelDispensed;
+    shift.testingFuel = testingFuel;
+    shift.notes = notes;
+    shift.status = 'Pending Approval';
 
-    // Create cash handover record
-    if (shift.cashCollected > 0) {
-      console.log("💵 Creating cash handover record...");
+    // Update meter readings based on fuel type
+    if (fuelType === 'Petrol' || fuelType === 'MS') {
+      shift.meterReadingPetrol = {
+        opening: shift.startReading,
+        closing: endReading
+      };
+    } else if (fuelType === 'Diesel' || fuelType === 'HSD') {
+      shift.meterReadingHSD = {
+        opening: shift.startReading,
+        closing: endReading
+      };
+    }
+
+    await shift.save();
+
+    console.log(`✅ Shift ${shift.shiftId} updated successfully`);
+
+    // DEDUCT FUEL FROM TANK - FIXED CALL
+    if (finalFuelDispensed > 0) {
+      console.log(`🔄 Starting automatic tank deduction for shift ${shift.shiftId}`);
+      console.log(`⛽ Fuel type for deduction: ${fuelType}`);
+      
       try {
-        const cashHandover = await CashHandover.create({
-          shift: shift._id,
-          nozzleman: shift.nozzleman,
-          amount: shift.cashCollected,
-          status: "Pending",
-          notes: `Cash collected from shift ${shift.shiftId}`
-        });
-        console.log("✅ Cash handover created:", cashHandover._id);
-      } catch (error) {
-        console.error("❌ Error creating cash handover:", error);
+        await deductFuelFromTank(fuelType, finalFuelDispensed);
+        console.log(`✅ Tank deduction completed for ${finalFuelDispensed}L of ${fuelType}`);
+      } catch (tankError) {
+        console.error('❌ Tank deduction failed:', tankError.message);
+        // Don't throw error here - continue with shift ending but log the issue
+        shift.notes = `${shift.notes || ''} [Tank deduction failed: ${tankError.message}]`.trim();
+        await shift.save();
       }
     }
 
     // Update nozzle current reading
-    await Nozzle.findByIdAndUpdate(shift.nozzle, {
-      currentReading: shift.endReading,
-      $inc: { totalDispensed: fuelDispensed }
-    });
+    if (shift.nozzle) {
+      const nozzle = await Nozzle.findById(shift.nozzle._id);
+      if (nozzle) {
+        nozzle.currentReading = endReading;
+        nozzle.totalDispensed += finalFuelDispensed;
+        await nozzle.save();
+        console.log(`✅ Nozzle ${nozzle.number} reading updated to ${endReading}`);
+      }
+    }
 
-    // Update nozzleman statistics
-    await Nozzleman.findByIdAndUpdate(shift.nozzleman, {
-      $inc: {
-        totalFuelDispensed: fuelDispensed
+    // Update pump current reading and total sales
+    if (shift.pump) {
+      const pump = await Pump.findById(shift.pump._id);
+      if (pump) {
+        pump.currentReading = endReading;
+        pump.totalSales += finalFuelDispensed;
+        await pump.save();
+        console.log(`✅ Pump ${pump.name} reading updated to ${endReading}`);
+      }
+    }
+
+    // Populate and return the updated shift
+    const updatedShift = await Shift.findById(id)
+      .populate('nozzle', 'number fuelType')
+      .populate('pump', 'name location fuelType')
+      .populate('nozzleman', 'name employeeId')
+      .populate('createdBy', 'name');
+
+    console.log(`🎉 Shift ${shift.shiftId} ended successfully`);
+
+    res.json({
+      message: 'Shift ended successfully',
+      shift: updatedShift,
+      fuelSummary: {
+        totalDispensed: finalFuelDispensed,
+        fuelType: fuelType,
+        testingFuel: testingFuel
+      },
+      financialSummary: {
+        cashCollected: cashCollected,
+        nonCashSales: totalNonCashSales,
+        expenses: expenses,
+        cashDeposit: cashDeposit,
+        cashInHand: cashInHand
       }
     });
 
-    const populatedShift = await Shift.findById(updatedShift._id)
-      .populate("nozzleman", "name employeeId mobile")
-      .populate("pump", "name location")
-      .populate("nozzle", "number fuelType")
-      .populate("createdBy", "name email");
-
-    res.json({
-      message: "Shift ended successfully and sent for approval",
-      shift: populatedShift
-    });
   } catch (error) {
-    console.error("Error in endShift:", error);
-    res.status(500);
-    throw new Error("Failed to end shift");
+    console.error('❌ Error in endShift:', error);
+    res.status(400);
+    throw new Error(`Failed to end shift: ${error.message}`);
   }
 });
 
-// @desc    Verify shift (Supervisor approval)
+// UPDATED deductFuelFromTank FUNCTION (without session)
+const deductFuelFromTank = async (fuelType, amount) => {
+  try {
+    console.log(`⛽ Looking for tank configuration for fuel type: ${fuelType}`);
+    
+    // Validate that fuelType is a string
+    if (typeof fuelType !== 'string') {
+      console.error('❌ Invalid fuel type received:', fuelType);
+      throw new Error(`Invalid fuel type format. Expected string, got: ${typeof fuelType}`);
+    }
+    
+    // Map fuel types to tank products
+    const fuelTypeToProductMap = {
+      "Petrol": "MS",
+      "Diesel": "HSD", 
+      "CNG": "CNG"
+    };
+    
+    const product = fuelTypeToProductMap[fuelType];
+    
+    if (!product) {
+      throw new Error(`Unsupported fuel type: ${fuelType}`);
+    }
+    
+    console.log(`🔍 Mapped ${fuelType} to product: ${product}`);
+    
+    // Find active tank for this product
+    const tankConfig = await TankConfig.findOne({ 
+      product: product,
+      isActive: true 
+    });
+    
+    if (!tankConfig) {
+      throw new Error(`Tank configuration not found for fuel type: ${fuelType} (product: ${product})`);
+    }
+    
+    console.log(`✅ Found tank: ${tankConfig.tankName} with current stock: ${tankConfig.currentStock}`);
+    
+    // Check if enough fuel in tank
+    if (tankConfig.currentStock < amount) {
+      throw new Error(`Insufficient fuel in ${fuelType} tank. Available: ${tankConfig.currentStock}L, Required: ${amount}L`);
+    }
+    
+    // Deduct fuel from tank
+    const previousStock = tankConfig.currentStock;
+    tankConfig.currentStock -= amount;
+    tankConfig.currentLevel = Math.round((tankConfig.currentStock / tankConfig.capacity) * 100);
+    tankConfig.alert = tankConfig.currentLevel <= 20;
+    tankConfig.lastUpdated = new Date();
+    
+    await tankConfig.save();
+    
+    console.log(`✅ Fuel deducted: ${amount}L from ${tankConfig.tankName}. New stock: ${tankConfig.currentStock}L`);
+    
+    // Create fuel stock transaction record
+    const FuelStock = mongoose.model("FuelStock");
+    await FuelStock.create({
+      tank: tankConfig._id,
+      transactionType: "sale_deduction",
+      previousStock: previousStock,
+      quantity: -amount, // Negative for deduction
+      newStock: tankConfig.currentStock,
+      reference: `shift_deduction_${Date.now()}`,
+      notes: `Automatic deduction for ${fuelType} sales from shift`,
+      createdBy: "system"
+    });
+    
+    return tankConfig;
+    
+  } catch (error) {
+    console.error(`❌ Error in deductFuelFromTank for ${fuelType}:`, error.message);
+    throw error;
+  }
+};
+
+// @desc    Verify shift (Supervisor approval) - UPDATED WITH AUDITOR TANK ADJUSTMENT
 // @route   PUT /api/shifts/verify/:id
 // @access  Private (Supervisor/Admin)
 export const verifyShift = asyncHandler(async (req, res) => {
   try {
-    const { isApproved, auditNotes } = req.body;
+    const { isApproved, auditNotes, finalFuelAdjustment = 0 } = req.body;
 
-    const shift = await Shift.findById(req.params.id);
+    const shift = await Shift.findById(req.params.id)
+      .populate("nozzle", "fuelType");
     
     if (!shift) {
       res.status(404);
@@ -532,11 +853,23 @@ export const verifyShift = asyncHandler(async (req, res) => {
       throw new Error("Shift is not pending approval");
     }
 
+    const previousFuelDispensed = shift.fuelDispensed;
+
     if (isApproved) {
       shift.status = "Approved";
       shift.auditNotes = auditNotes;
       shift.auditedBy = req.user._id;
       shift.auditedAt = new Date();
+
+      // If auditor makes final adjustment to fuel quantity
+      if (finalFuelAdjustment !== 0) {
+        console.log(`📊 Auditor fuel adjustment: ${finalFuelAdjustment}L`);
+        shift.fuelDispensed += parseFloat(finalFuelAdjustment);
+        shift.auditNotes += ` | Fuel adjusted by auditor: ${finalFuelAdjustment}L`;
+        
+        // Update the tank with final adjustment
+        await adjustTankForAuditor(shift, parseFloat(finalFuelAdjustment));
+      }
 
       // Update nozzleman average cash handled
       const nozzleman = await Nozzleman.findById(shift.nozzleman);
@@ -559,6 +892,23 @@ export const verifyShift = asyncHandler(async (req, res) => {
 
     const updatedShift = await shift.save();
 
+    // Create audit log
+    const AuditLog = mongoose.model("AuditLog");
+    await AuditLog.create({
+      action: isApproved ? "approved" : "rejected",
+      entityType: "Shift",
+      entityId: shift._id,
+      entityName: `Shift ${shift.shiftId}`,
+      performedBy: req.user._id,
+      notes: auditNotes || (isApproved ? "Shift approved by auditor" : "Shift rejected by auditor"),
+      details: {
+        previousFuelDispensed,
+        finalFuelDispensed: shift.fuelDispensed,
+        fuelAdjustment: finalFuelAdjustment,
+        cashCollected: shift.cashCollected
+      }
+    });
+
     const populatedShift = await Shift.findById(updatedShift._id)
       .populate("nozzleman", "name employeeId mobile")
       .populate("pump", "name location")
@@ -567,7 +917,12 @@ export const verifyShift = asyncHandler(async (req, res) => {
 
     res.json({
       message: `Shift ${isApproved ? 'approved' : 'rejected'} successfully`,
-      shift: populatedShift
+      shift: populatedShift,
+      adjustments: finalFuelAdjustment !== 0 ? {
+        fuelAdjustment: finalFuelAdjustment,
+        previousFuelTotal: previousFuelDispensed,
+        newFuelTotal: shift.fuelDispensed
+      } : null
     });
   } catch (error) {
     console.error("Error in verifyShift:", error);
@@ -760,8 +1115,6 @@ export const cancelShift = asyncHandler(async (req, res) => {
     throw new Error("Failed to cancel shift");
   }
 });
-
-// Add these endpoints to your shiftController.js
 
 // @desc    Get yesterday's closing readings for a nozzleman
 // @route   GET /api/shifts/yesterday-readings/:nozzlemanId
