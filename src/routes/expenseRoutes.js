@@ -1,3 +1,4 @@
+// routes/expenseRoutes.js - UPDATED WITH SYNC ROUTE
 import express from "express";
 import { 
   getExpenses, 
@@ -7,7 +8,7 @@ import {
   deleteExpense,
   approveExpense,
   rejectExpense,
-  syncShiftExpense,
+  syncShiftExpense,  // NEW IMPORT
 } from "../controllers/expenseController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -22,7 +23,7 @@ router.get("/:id", getExpense);
 
 // POST routes
 router.post("/", createExpense);
-router.post("/sync", syncShiftExpense);
+router.post("/sync", syncShiftExpense);  // NEW SYNC ROUTE
 
 // PUT routes
 router.put("/:id", updateExpense);

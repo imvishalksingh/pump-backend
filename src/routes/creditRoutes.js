@@ -1,4 +1,4 @@
-// routes/creditRoutes.js
+// routes/creditRoutes.js - UPDATED WITH SYNC ROUTE
 import express from "express";
 import { 
   getCustomers, 
@@ -6,7 +6,8 @@ import {
   createCustomer, 
   updateCustomer, 
   deleteCustomer, 
-  recordPayment 
+  recordPayment,
+  syncCreditSale  // NEW IMPORT
 } from "../controllers/creditController.js";
 import { getCustomerLedger, getAllLedger } from "../controllers/ledgerController.js";
 import { protect } from "../middleware/authMiddleware.js";
@@ -24,6 +25,9 @@ router.delete("/:id", deleteCustomer);
 
 // Payment routes
 router.post("/:id/payment", recordPayment);
+
+// NEW: Credit sale sync route
+router.post("/sync-sale", syncCreditSale);
 
 // Ledger routes
 router.get("/:id/ledger", getCustomerLedger);

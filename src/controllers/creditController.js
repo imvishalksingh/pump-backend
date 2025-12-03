@@ -1,5 +1,6 @@
-// controllers/creditController.js
+// controllers/creditController.js - UPDATED WITH SYNC FUNCTION
 import Customer from "../models/Customer.js";
+import Ledger from "../models/Ledger.js";
 import asyncHandler from "express-async-handler";
 
 // @desc    Get all customers
@@ -142,12 +143,6 @@ export const recordPayment = asyncHandler(async (req, res) => {
     currentBalance: customer.balance 
   });
 
-  // REMOVE THIS VALIDATION - Allow payments even when balance is zero
-  // if (amount > customer.balance) {
-  //   res.status(400);
-  //   throw new Error("Payment amount cannot exceed outstanding balance");
-  // }
-
   // Update customer balance (ALLOW NEGATIVE VALUES FOR ADVANCE PAYMENTS)
   const oldBalance = customer.balance;
   customer.balance = oldBalance - amount;
@@ -160,7 +155,6 @@ export const recordPayment = asyncHandler(async (req, res) => {
   await customer.save();
 
   // Create ledger entry
-  const Ledger = (await import("../models/ledger.js")).default;
   const ledgerEntry = await Ledger.create({
     customer: customer._id,
     type: "Payment",
@@ -178,6 +172,77 @@ export const recordPayment = asyncHandler(async (req, res) => {
     success: true,
     message: "Payment recorded successfully",
     customer,
+    ledgerEntry,
+    oldBalance,
+    newBalance: customer.balance
+  });
+});
+
+// @desc    Sync a credit sale record from a shift
+// @route   POST /api/customers/sync-sale
+// @access  Private (Admin/Supervisor)
+export const syncCreditSale = asyncHandler(async (req, res) => {
+  const { customerId, amount, shiftId, date, vehicleNumber, notes } = req.body;
+
+  console.log("🟡 Credit sale sync request:", req.body);
+
+  if (!customerId || !amount || amount <= 0) {
+    res.status(400);
+    throw new Error("Customer ID and valid Amount are required");
+  }
+
+  const customer = await Customer.findById(customerId);
+  if (!customer) {
+    res.status(404);
+    throw new Error("Customer not found");
+  }
+
+  // Check credit limit
+  const newBalance = (customer.balance || 0) + Number(amount);
+  if (newBalance > customer.creditLimit) {
+    res.status(400);
+    throw new Error(`Credit limit exceeded. Current balance: ${customer.balance}, Limit: ${customer.creditLimit}`);
+  }
+
+  // 1. Update Customer Balance (Increase balance for sales)
+  const oldBalance = customer.balance;
+  customer.balance = newBalance;
+  customer.lastTransactionDate = new Date();
+  await customer.save();
+
+  console.log("🟡 Customer balance updated:", { 
+    customer: customer.name, 
+    oldBalance, 
+    newBalance: customer.balance 
+  });
+
+  // 2. Create Ledger Entry
+  const ledgerEntry = await Ledger.create({
+    customer: customerId,
+    shift: shiftId || null,
+    transactionType: "Sale",
+    amount: Number(amount),
+    totalAmount: Number(amount),
+    balanceAfter: customer.balance,
+    description: notes || `Credit sale recorded from shift`,
+    vehicleNumber: vehicleNumber || "",
+    transactionDate: date ? new Date(date) : new Date(),
+    createdBy: req.user._id,
+    status: "Completed",
+    referenceNumber: `SALE-${Date.now().toString().slice(-8)}`
+  });
+
+  console.log("✅ Ledger entry created:", ledgerEntry._id);
+
+  res.status(201).json({
+    success: true,
+    message: "Credit sale synced successfully",
+    customer: {
+      _id: customer._id,
+      name: customer.name,
+      balance: customer.balance,
+      creditLimit: customer.creditLimit
+    },
     ledgerEntry,
     oldBalance,
     newBalance: customer.balance

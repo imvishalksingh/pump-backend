@@ -1,3 +1,4 @@
+// controllers/expenseController.js - UPDATED WITH SYNC FUNCTION
 import Expense from "../models/Expense.js";
 import asyncHandler from "express-async-handler";
 
@@ -213,7 +214,9 @@ export const rejectExpense = asyncHandler(async (req, res) => {
   }
 });
 
-// expenseController.js में नया function जोड़ें
+// @desc    Sync shift expense to expense system
+// @route   POST /api/expenses/sync
+// @access  Private
 export const syncShiftExpense = asyncHandler(async (req, res) => {
   try {
     const { 
