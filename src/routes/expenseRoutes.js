@@ -6,7 +6,8 @@ import {
   updateExpense, 
   deleteExpense,
   approveExpense,
-  rejectExpense
+  rejectExpense,
+  syncShiftExpense,
 } from "../controllers/expenseController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -21,6 +22,7 @@ router.get("/:id", getExpense);
 
 // POST routes
 router.post("/", createExpense);
+router.post("/sync", syncShiftExpense);
 
 // PUT routes
 router.put("/:id", updateExpense);

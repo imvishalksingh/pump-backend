@@ -1,5 +1,100 @@
-// models/Shift.js - UPDATED
+// models/Shift.js - UPDATED WITH RECORDS
 import mongoose from "mongoose";
+
+const cashRecordSchema = new mongoose.Schema({
+  amount: {
+    type: Number,
+    required: true
+  },
+  time: {
+    type: String,
+    required: true
+  },
+  notes: String,
+  billNumber: String,
+  vehicleNumber: String,
+  paymentMethod: {
+    type: String,
+    enum: ["cash", "card", "upi"],
+    default: "cash"
+  }
+});
+
+const digitalRecordSchema = new mongoose.Schema({
+  amount: {
+    type: Number,
+    required: true
+  },
+  time: {
+    type: String,
+    required: true
+  },
+  transactionId: {
+    type: String,
+    required: true
+  },
+  customerName: String,
+  notes: String
+});
+
+const fuelRecordSchema = new mongoose.Schema({
+  liters: {
+    type: Number,
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true
+  },
+  time: {
+    type: String,
+    required: true
+  },
+  vehicleNumber: String,
+  fuelType: {
+    type: String,
+    enum: ["Petrol", "Diesel", "CNG"],
+    required: true
+  },
+  nozzleNumber: String,
+  notes: String
+});
+
+const testingRecordSchema = new mongoose.Schema({
+  liters: {
+    type: Number,
+    required: true
+  },
+  time: {
+    type: String,
+    required: true
+  },
+  testedBy: {
+    type: String,
+    required: true
+  },
+  notes: String
+});
+
+const expenseRecordSchema = new mongoose.Schema({
+  amount: {
+    type: Number,
+    required: true
+  },
+  time: {
+    type: String,
+    required: true
+  },
+  category: {
+    type: String,
+    required: true
+  },
+  description: {
+    type: String,
+    required: true
+  },
+  receiptNumber: String
+});
 
 const shiftSchema = mongoose.Schema(
   {
@@ -41,10 +136,8 @@ const shiftSchema = mongoose.Schema(
     endReading: {
       type: Number,
     },
-    // Reading proof images
     startReadingImage: {
       type: String,
-      required: true,
     },
     endReadingImage: {
       type: String,
@@ -53,7 +146,6 @@ const shiftSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
-    // ADD TESTING FUEL FIELD
     testingFuel: {
       type: Number,
       default: 0,
@@ -70,7 +162,6 @@ const shiftSchema = mongoose.Schema(
     notes: {
       type: String,
     },
-    // Audit fields
     auditNotes: {
       type: String,
     },
@@ -86,7 +177,6 @@ const shiftSchema = mongoose.Schema(
       ref: "User",
       required: true,
     },
-    // Sales breakdown
     phonePeSales: {
       type: Number,
       default: 0,
@@ -127,6 +217,14 @@ const shiftSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    
+    // ADD RECORDS ARRAYS
+    cashSalesRecords: [cashRecordSchema],
+    phonePeRecords: [digitalRecordSchema],
+    posRecords: [digitalRecordSchema],
+    fuelRecords: [fuelRecordSchema],
+    testingRecords: [testingRecordSchema],
+    expenseRecords: [expenseRecordSchema],
   },
   {
     timestamps: true,

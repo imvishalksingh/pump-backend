@@ -212,3 +212,62 @@ export const rejectExpense = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// expenseController.js में नया function जोड़ें
+export const syncShiftExpense = asyncHandler(async (req, res) => {
+  try {
+    const { 
+      category, 
+      amount, 
+      description, 
+      date, 
+      shiftId, 
+      nozzlemanId, 
+      shiftReference 
+    } = req.body;
+
+    console.log("🔄 Syncing shift expense:", req.body);
+
+    // Validation
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ 
+        message: "Please provide a valid amount" 
+      });
+    }
+
+    // Check if expense already exists for this shift
+    const existingExpense = await Expense.findOne({ 
+      shiftId: shiftId,
+      amount: amount,
+      date: date ? new Date(date) : new Date()
+    });
+
+    if (existingExpense) {
+      console.log("ℹ️ Expense already exists for this shift");
+      return res.status(200).json(existingExpense);
+    }
+
+    const expense = await Expense.create({
+      category: category || "ShiftExpense",
+      amount: Number(amount),
+      description: description || "Expense from shift",
+      date: date ? new Date(date) : new Date(),
+      shiftId: shiftId || null,
+      nozzlemanId: nozzlemanId || null,
+      shiftReference: shiftReference || "",
+      addedBy: "System Sync",
+      status: "Approved", // Automatically approve system-synced expenses
+      isShiftExpense: true
+    });
+
+    console.log("✅ Shift expense synced successfully:", expense);
+
+    res.status(201).json(expense);
+  } catch (error) {
+    console.error("❌ Error syncing shift expense:", error);
+    res.status(500).json({ 
+      message: "Failed to sync shift expense",
+      error: error.message 
+    });
+  }
+});

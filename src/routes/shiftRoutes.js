@@ -1,4 +1,4 @@
-// routes/shiftRoutes.js - COMPLETE VERSION (NO CHANGES NEEDED)
+// routes/shiftRoutes.js - UPDATED WITH RECORDS ROUTES
 import express from "express";
 import {
   getShifts,
@@ -15,6 +15,11 @@ import {
   getYesterdayReadings,
   createManualShiftEntry,
 } from "../controllers/shiftController.js";
+import {
+  getShiftRecords,
+  addShiftRecord,
+  updateShiftRecordsBulk
+} from "../controllers/recordController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 
@@ -30,6 +35,11 @@ router.post("/start", startShift);
 router.put("/end/:id", endShift);
 router.put("/verify/:id", authorize("supervisor", "admin"), verifyShift);
 router.put("/cancel/:id", authorize("supervisor", "admin"), cancelShift);
+
+// RECORDS ROUTES
+router.get("/:shiftId/records", getShiftRecords);
+router.post("/:shiftId/records", addShiftRecord);
+router.put("/:shiftId/records/bulk", updateShiftRecordsBulk);
 
 // PARAMETERIZED ROUTES LAST
 router.get("/", getShifts);

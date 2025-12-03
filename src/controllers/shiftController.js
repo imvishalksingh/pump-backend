@@ -931,60 +931,251 @@ export const verifyShift = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Update shift
+// @desc    Update shift - COMPLETELY REWRITTEN DEBUG VERSION
 // @route   PUT /api/shifts/:id
-// @access  Private
+// @access  Private/Admin
 export const updateShift = asyncHandler(async (req, res) => {
+  console.log("=== 🚨 UPDATE SHIFT STARTED ===");
+  console.log("📝 Shift ID from params:", req.params.id);
+  console.log("👤 User making request:", req.user?._id, req.user?.role);
+  
+  let shift;
+  
   try {
-    const shift = await Shift.findById(req.params.id);
+    // STEP 1: Find the shift
+    console.log("🔍 STEP 1: Finding shift...");
+    shift = await Shift.findById(req.params.id);
     
     if (!shift) {
-      res.status(404);
-      throw new Error("Shift not found");
+      console.log("❌ STEP 1 FAILED: Shift not found");
+      return res.status(404).json({
+        success: false,
+        error: "Shift not found",
+        details: `Shift ID: ${req.params.id}`
+      });
     }
-
-    // Prevent updating completed or approved shifts
-    if (["Completed", "Approved"].includes(shift.status)) {
-      res.status(400);
-      throw new Error(`Cannot update ${shift.status.toLowerCase()} shift`);
-    }
-
-    // Fields that can be updated
-    const updatableFields = [
-      'notes', 'cashCollected', 'phonePeSales', 'posSales', 
-      'otpSales', 'creditSales', 'expenses', 'cashDeposit',
-      'meterReadingHSD', 'meterReadingPetrol'
-    ];
-
-    updatableFields.forEach(field => {
-      if (req.body[field] !== undefined) {
-        shift[field] = req.body[field];
-      }
+    
+    console.log("✅ STEP 1 SUCCESS: Shift found");
+    console.log("📋 Current Shift Data:", {
+      _id: shift._id,
+      shiftId: shift.shiftId,
+      status: shift.status,
+      nozzleman: shift.nozzleman,
+      pump: shift.pump,
+      nozzle: shift.nozzle
     });
 
-    // Recalculate cash in hand if relevant fields are updated
-    if (req.body.cashCollected !== undefined || req.body.expenses !== undefined || req.body.cashDeposit !== undefined) {
-      const totalSales = shift.cashCollected + shift.phonePeSales + shift.posSales + shift.otpSales + shift.creditSales;
-      shift.cashInHand = totalSales - shift.expenses - shift.cashDeposit;
+    // STEP 2: Check permissions
+    console.log("🔍 STEP 2: Checking permissions...");
+    if (["Completed", "Approved"].includes(shift.status)) {
+      const userRole = req.user?.role;
+      const isAdmin = userRole === 'admin' || userRole === 'Admin';
+      
+      if (!isAdmin) {
+        console.log("❌ STEP 2 FAILED: No admin privileges");
+        return res.status(403).json({
+          success: false,
+          error: `Cannot update ${shift.status.toLowerCase()} shift without admin privileges`
+        });
+      }
+      console.log("✅ STEP 2 SUCCESS: Admin override allowed");
     }
 
+    // STEP 3: Log incoming data
+    console.log("📦 STEP 3: Processing request data...");
+    console.log("Incoming request body:", JSON.stringify(req.body, null, 2));
+    
+    // Check for problematic fields
+    const problematicFields = [];
+    Object.keys(req.body).forEach(key => {
+      if (req.body[key] === undefined || req.body[key] === null) {
+        problematicFields.push(key);
+      }
+    });
+    
+    if (problematicFields.length > 0) {
+      console.log("⚠️ Problematic fields with undefined/null:", problematicFields);
+    }
+
+    // STEP 4: Update fields one by one with validation
+    console.log("🔄 STEP 4: Updating fields...");
+    
+    const updateableFields = [
+      'shiftId', 'nozzlemanId', 'pumpId', 'nozzleId', 'startTime', 'endTime',
+      'startReading', 'endReading', 'fuelDispensed', 'testingFuel',
+      'cashCollected', 'phonePeSales', 'posSales', 'otpSales', 'creditSales',
+      'expenses', 'cashDeposit', 'cashInHand', 'meterReadingHSD', 'meterReadingPetrol',
+      'status', 'notes', 'auditNotes', 'isManualEntry'
+    ];
+
+    for (const field of updateableFields) {
+      if (req.body[field] !== undefined) {
+        console.log(`   Updating ${field}: ${shift[field]} → ${req.body[field]}`);
+        
+        // Special handling for ObjectId fields
+        if (field.endsWith('Id') && req.body[field]) {
+          if (!mongoose.Types.ObjectId.isValid(req.body[field])) {
+            console.log(`❌ Invalid ObjectId for ${field}: ${req.body[field]}`);
+            return res.status(400).json({
+              success: false,
+              error: `Invalid ID format for ${field}`,
+              details: `Value: ${req.body[field]}`
+            });
+          }
+        }
+        
+        shift[field] = req.body[field];
+      }
+    }
+
+    // STEP 5: Handle nested objects
+    console.log("🔄 STEP 5: Handling nested objects...");
+    if (req.body.meterReadingHSD) {
+      console.log("   Updating meterReadingHSD:", req.body.meterReadingHSD);
+      shift.meterReadingHSD = shift.meterReadingHSD || {};
+      Object.keys(req.body.meterReadingHSD).forEach(key => {
+        shift.meterReadingHSD[key] = req.body.meterReadingHSD[key];
+      });
+    }
+
+    if (req.body.meterReadingPetrol) {
+      console.log("   Updating meterReadingPetrol:", req.body.meterReadingPetrol);
+      shift.meterReadingPetrol = shift.meterReadingPetrol || {};
+      Object.keys(req.body.meterReadingPetrol).forEach(key => {
+        shift.meterReadingPetrol[key] = req.body.meterReadingPetrol[key];
+      });
+    }
+
+    // STEP 6: Manual validation
+    console.log("🔍 STEP 6: Manual validation...");
+    
+    // Check required fields
+    if (!shift.shiftId) {
+      return res.status(400).json({
+        success: false,
+        error: "Shift ID is required"
+      });
+    }
+    
+    if (!shift.nozzleman) {
+      return res.status(400).json({
+        success: false,
+        error: "Nozzleman is required"
+      });
+    }
+    
+    // Check numeric fields
+    const numericFields = ['startReading', 'endReading', 'fuelDispensed', 'testingFuel', 'cashCollected', 'expenses', 'cashDeposit'];
+    for (const field of numericFields) {
+      if (shift[field] !== undefined && isNaN(parseFloat(shift[field]))) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid number for ${field}`,
+          details: `Value: ${shift[field]}`
+        });
+      }
+    }
+
+    console.log("✅ STEP 6 SUCCESS: Manual validation passed");
+
+    // STEP 7: Save the document
+    console.log("💾 STEP 7: Saving shift...");
+    
+    // Try manual save first to see exact error
+    try {
+      const validationError = shift.validateSync();
+      if (validationError) {
+        console.log("❌ Mongoose validation error:", validationError);
+        const errors = {};
+        Object.keys(validationError.errors).forEach(key => {
+          errors[key] = validationError.errors[key].message;
+        });
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: errors
+        });
+      }
+    } catch (validateError) {
+      console.log("❌ ValidateSync error:", validateError);
+    }
+
+    // Now try to save
     const updatedShift = await shift.save();
+    console.log("✅ STEP 7 SUCCESS: Shift saved");
 
+    // STEP 8: Populate and return
+    console.log("🔍 STEP 8: Populating data...");
     const populatedShift = await Shift.findById(updatedShift._id)
-      .populate("nozzleman", "name employeeId mobile")
+      .populate("nozzleman", "name employeeId")
       .populate("pump", "name location")
-      .populate("nozzle", "number fuelType")
-      .populate("createdBy", "name email")
-      .populate("auditedBy", "name email");
+      .populate("nozzle", "number fuelType");
 
-    res.json({
+    console.log("🎉 === UPDATE COMPLETED SUCCESSFULLY ===");
+
+    return res.json({
+      success: true,
       message: "Shift updated successfully",
       shift: populatedShift
     });
+
   } catch (error) {
-    console.error("Error in updateShift:", error);
-    res.status(500);
-    throw new Error("Failed to update shift");
+    console.error("💥 === CRITICAL ERROR IN UPDATE SHIFT ===");
+    console.error("Error name:", error.name);
+    console.error("Error message:", error.message);
+    console.error("Error code:", error.code);
+    console.error("Error stack:", error.stack);
+    
+    // Log the current shift state if available
+    if (shift) {
+      console.error("Current shift state before error:", {
+        _id: shift._id,
+        shiftId: shift.shiftId,
+        status: shift.status
+      });
+    }
+
+    // Specific error handling
+    if (error.name === 'CastError') {
+      console.error("❌ CastError - Invalid ID format");
+      return res.status(400).json({
+        success: false,
+        error: "Invalid shift ID format",
+        details: error.message
+      });
+    } else if (error.name === 'ValidationError') {
+      console.error("❌ ValidationError - Data validation failed");
+      const errors = {};
+      Object.keys(error.errors).forEach(key => {
+        errors[key] = error.errors[key].message;
+      });
+      return res.status(400).json({
+        success: false,
+        error: "Data validation failed",
+        details: errors
+      });
+    } else if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+      console.error("❌ MongoDB Error");
+      if (error.code === 11000) {
+        return res.status(400).json({
+          success: false,
+          error: "Duplicate shift ID",
+          details: "A shift with this ID already exists"
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: "Database error occurred",
+        details: error.message
+      });
+    } else {
+      console.error("❌ Unknown error type");
+      return res.status(500).json({
+        success: false,
+        error: "Failed to update shift",
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
   }
 });
 
@@ -1146,54 +1337,203 @@ export const getYesterdayReadings = asyncHandler(async (req, res) => {
   res.json({ nozzleReadings });
 });
 
-// @desc    Create manual shift entry
-// @route   POST /api/shifts/manual-entry
-// @access  Private
+// controllers/shiftController.js - UPDATED VERSION
 export const createManualShiftEntry = asyncHandler(async (req, res) => {
-  const manualData = req.body;
-  
-  // Create shift record with manual data
-  const shift = await Shift.create({
-    shiftId: manualData.shiftId,
-    nozzleman: manualData.nozzlemanId,
-    startTime: new Date(`${manualData.date}T00:00:00`),
-    endTime: new Date(`${manualData.date}T23:59:59`),
-    startReading: 0, // Not used in manual entry
-    endReading: 0, // Not used in manual entry
-    cashCollected: manualData.cashSales,
-    phonePeSales: manualData.phonePeSales,
-    posSales: manualData.posSales,
-    creditSales: manualData.creditSales,
-    expenses: manualData.expenses,
-    cashDeposit: manualData.cashDeposit,
-    cashInHand: manualData.cashInHand,
-    fuelDispensed: manualData.fuelDispensed,
-    status: "Completed",
-    notes: manualData.notes,
-    isManualEntry: true,
-    recordedBy: req.user._id // Admin/manager who entered the data
-  });
-  
-  // Create nozzle reading records
-  for (const reading of manualData.nozzleReadings) {
-    await NozzleReading.create({
-      shift: shift._id,
-      nozzle: reading.nozzleId,
-      openingReading: reading.openingReading,
-      closingReading: reading.closingReading,
-      sales: reading.sales,
-      recordedBy: req.user._id
+  try {
+    console.log("🔍 Manual Shift Entry Request");
+    console.log("User Role:", req.user?.role);
+    console.log("Request Body:", req.body);
+
+    const {
+      nozzlemanId,
+      pumpId,
+      nozzleId,
+      startReading,
+      endReading,
+      startTime,
+      endTime,
+      date,
+      notes = "",
+      // Initial values
+      cashCollected = 0,
+      phonePeSales = 0,
+      posSales = 0,
+      otpSales = 0,
+      creditSales = 0,
+      fuelDispensed = 0,
+      testingFuel = 0,
+      expenses = 0,
+      cashDeposit = 0,
+      cashInHand = 0,
+      status = "Active", // Default to Active for admin-created shifts
+      meterReadingHSD = { opening: 0, closing: 0 },
+      meterReadingPetrol = { opening: 0, closing: 0 },
+      shiftId,
+      // NEW FLAG FOR SIMPLE SHIFT START
+      isSimpleStart = false // Add this flag
+    } = req.body;
+
+    // VALIDATION - REQUIRED FIELDS
+    if (!nozzlemanId) {
+      return res.status(400).json({
+        success: false,
+        error: "Nozzleman ID is required"
+      });
+    }
+
+    // For simple shift start, only date is required
+    let requiredDate = date;
+    if (!requiredDate && !isSimpleStart) {
+      return res.status(400).json({
+        success: false,
+        error: "Date is required"
+      });
+    }
+
+    // If no date provided for simple start, use today
+    if (!requiredDate && isSimpleStart) {
+      requiredDate = new Date().toISOString().split('T')[0];
+    }
+
+    // Check if nozzleman exists
+    const nozzleman = await Nozzleman.findById(nozzlemanId);
+    if (!nozzleman) {
+      return res.status(404).json({
+        success: false,
+        error: "Nozzleman not found"
+      });
+    }
+
+    // Check if nozzleman already has active shift
+    const activeShift = await Shift.findOne({
+      nozzleman: nozzlemanId,
+      status: { $in: ["Active", "Pending Approval"] }
     });
+
+    if (activeShift) {
+      return res.status(400).json({
+        success: false,
+        error: `Nozzleman already has an active shift (${activeShift.shiftId})`,
+        activeShiftId: activeShift._id,
+        shiftId: activeShift.shiftId
+      });
+    }
+
+    // Generate shift ID if not provided
+    const finalShiftId = shiftId || `SH-${Date.now().toString().slice(-6)}`;
+
+    // Parse dates
+    let parsedStartTime, parsedEndTime;
     
-    // Update nozzle current reading
-    await Nozzle.findByIdAndUpdate(reading.nozzleId, {
-      currentReading: reading.closingReading
+    if (startTime && requiredDate) {
+      parsedStartTime = new Date(`${requiredDate}T${startTime}:00.000Z`);
+    } else if (requiredDate) {
+      parsedStartTime = new Date(`${requiredDate}T08:00:00.000Z`); // Default 8 AM
+    } else {
+      parsedStartTime = new Date();
+    }
+
+    if (endTime && requiredDate) {
+      parsedEndTime = new Date(`${requiredDate}T${endTime}:00.000Z`);
+    } else {
+      parsedEndTime = new Date(parsedStartTime);
+      parsedEndTime.setHours(parsedEndTime.getHours() + 8); // Default 8 hour shift
+    }
+
+    // FOR SIMPLE SHIFT START - Use nozzleman's assigned pump & nozzle
+    let finalPumpId = pumpId;
+    let finalNozzleId = nozzleId;
+    let finalStartReading = startReading;
+
+    if (isSimpleStart) {
+      // Try to get nozzleman's assigned pump and nozzle
+      if (nozzleman.assignedPump) {
+        finalPumpId = nozzleman.assignedPump;
+      }
+      
+      if (nozzleman.assignedNozzle) {
+        finalNozzleId = nozzleman.assignedNozzle;
+        
+        // Get current reading from nozzle
+        const nozzle = await Nozzle.findById(finalNozzleId);
+        if (nozzle) {
+          finalStartReading = nozzle.currentReading || 0;
+        }
+      }
+    }
+
+    // Create shift data
+    const shiftData = {
+      shiftId: finalShiftId,
+      nozzleman: nozzlemanId,
+      pump: finalPumpId,
+      nozzle: finalNozzleId,
+      startTime: parsedStartTime,
+      endTime: parsedEndTime,
+      startReading: parseFloat(finalStartReading) || 0,
+      endReading: parseFloat(endReading) || parseFloat(finalStartReading) || 0,
+      fuelDispensed: parseFloat(fuelDispensed) || 0,
+      testingFuel: parseFloat(testingFuel) || 0,
+      cashCollected: parseFloat(cashCollected) || 0,
+      phonePeSales: parseFloat(phonePeSales) || 0,
+      posSales: parseFloat(posSales) || 0,
+      otpSales: parseFloat(otpSales) || 0,
+      creditSales: parseFloat(creditSales) || 0,
+      expenses: parseFloat(expenses) || 0,
+      cashDeposit: parseFloat(cashDeposit) || 0,
+      cashInHand: parseFloat(cashInHand) || 0,
+      meterReadingHSD: meterReadingHSD,
+      meterReadingPetrol: meterReadingPetrol,
+      status: status,
+      notes: notes || `Shift started by ${req.user.name} for ${nozzleman.name}`,
+      isManualEntry: true,
+      createdBy: req.user._id
+    };
+
+    // Remove null/undefined fields
+    Object.keys(shiftData).forEach(key => {
+      if (shiftData[key] === null || shiftData[key] === undefined) {
+        delete shiftData[key];
+      }
+    });
+
+    console.log("📋 Creating shift with data:", shiftData);
+
+    const shift = await Shift.create(shiftData);
+
+    // Update nozzle current reading if available
+    if (finalNozzleId) {
+      await Nozzle.findByIdAndUpdate(finalNozzleId, {
+        currentReading: parseFloat(finalStartReading) || 0
+      });
+    }
+
+    // Update nozzleman stats
+    await Nozzleman.findByIdAndUpdate(nozzlemanId, {
+      $inc: { totalShifts: 1 }
+    });
+
+    // Populate response
+    const populatedShift = await Shift.findById(shift._id)
+      .populate("nozzleman", "name employeeId mobile")
+      .populate("pump", "name location")
+      .populate("nozzle", "number fuelType")
+      .populate("createdBy", "name email");
+
+    res.status(201).json({
+      success: true,
+      message: isSimpleStart ? "Shift started successfully" : "Manual entry created successfully",
+      shift: populatedShift,
+      isSimpleStart: isSimpleStart
+    });
+
+  } catch (error) {
+    console.error("❌ Error in createManualShiftEntry:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to create entry",
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-  
-  res.status(201).json({
-    success: true,
-    message: "Manual shift data recorded successfully",
-    shift
-  });
 });
+

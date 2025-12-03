@@ -1,10 +1,11 @@
+// models/Expense.js - UPDATED
 import mongoose from "mongoose";
 
 const expenseSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['Maintenance', 'Salary', 'Utilities', 'Supplies', 'Other']
+    enum: ['Maintenance', 'Salary', 'Utilities', 'Supplies', 'Other', 'ShiftExpense']
   },
   amount: {
     type: Number,
@@ -14,6 +15,19 @@ const expenseSchema = new mongoose.Schema({
   description: {
     type: String,
     default: ""
+  },
+  shiftId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Shift",
+    default: null
+  },
+  nozzlemanId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Nozzleman",
+    default: null
+  },
+  shiftReference: {
+    type: String
   },
   addedBy: {
     type: String,
@@ -32,6 +46,10 @@ const expenseSchema = new mongoose.Schema({
     type: String,
     enum: ['Pending', 'Approved', 'Rejected'],
     default: 'Pending'
+  },
+  isShiftExpense: {
+    type: Boolean,
+    default: false
   }
 }, { 
   timestamps: true 
