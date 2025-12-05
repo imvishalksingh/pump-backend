@@ -4,13 +4,24 @@ import asyncHandler from "express-async-handler";
 // @desc    Get all nozzlemen
 // @route   GET /api/nozzlemen
 // @access  Private
-export const getNozzlemen = asyncHandler(async (req, res) => {
-  const nozzlemen = await Nozzleman.find()
-    .populate("assignedPump")
-    .populate("assignedNozzles")
-    .sort({ createdAt: -1 });
-  res.json(nozzlemen);
-});
+export const getNozzlemen = async (req, res) => {
+  try {
+    const nozzlemen = await Nozzleman.find()
+      .populate('assignedPump', 'name location fuelType')
+      .populate('assignedNozzles', 'number fuelType currentReading pump');
+    
+    res.json({
+      success: true,
+      data: nozzlemen
+    });
+  } catch (error) {
+    console.error("Error fetching nozzlemen:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
 
 // @desc    Get single nozzleman
 // @route   GET /api/nozzlemen/:id

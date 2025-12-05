@@ -70,10 +70,23 @@ const customerSchema = mongoose.Schema(
       default: 0,
       min: 0
     },
+    // ADDED: balance field for backward compatibility
+    balance: {
+      type: Number,
+      default: 0,
+      min: 0,
+      get: function() {
+        return this.currentBalance; // Return currentBalance when balance is accessed
+      },
+      set: function(value) {
+        this.currentBalance = value; // Set currentBalance when balance is set
+        return value;
+      }
+    },
     availableCredit: {
       type: Number,
       default: function() {
-        return this.creditLimit - this.currentBalance;
+        return Math.max(0, this.creditLimit - this.currentBalance);
       }
     },
     creditPeriod: {
@@ -195,8 +208,14 @@ const customerSchema = mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toJSON: { 
+      virtuals: true,
+      getters: true // Enable getters when converting to JSON
+    },
+    toObject: { 
+      virtuals: true,
+      getters: true // Enable getters when converting to object
+    }
   }
 );
 
@@ -225,6 +244,10 @@ customerSchema.index({ createdAt: -1 });
 
 // Pre-save middleware to calculate available credit
 customerSchema.pre("save", function(next) {
+  // Ensure currentBalance is always in sync with balance getter/setter
+  if (this.isModified('balance') && !this.isModified('currentBalance')) {
+    this.currentBalance = this.balance;
+  }
   this.availableCredit = Math.max(0, this.creditLimit - this.currentBalance);
   next();
 });
@@ -243,6 +266,7 @@ customerSchema.methods.getSummary = function() {
     mobile: this.mobile,
     creditLimit: this.creditLimit,
     currentBalance: this.currentBalance,
+    balance: this.balance, // Include for backward compatibility
     availableCredit: this.availableCredit,
     status: this.status,
     lastTransactionDate: this.lastTransactionDate,

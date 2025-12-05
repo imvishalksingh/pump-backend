@@ -22,7 +22,7 @@ export const getCustomerLedger = asyncHandler(async (req, res) => {
   res.json({
     customer,
     ledgerEntries,
-    currentBalance: customer.balance
+    currentBalance: customer.currentBalance // CHANGED from balance to currentBalance
   });
 });
 
@@ -31,7 +31,7 @@ export const getCustomerLedger = asyncHandler(async (req, res) => {
 // @access  Private
 export const getAllLedger = asyncHandler(async (req, res) => {
   const ledgerEntries = await Ledger.find()
-    .populate("customer", "name mobile")
+    .populate("customer", "name mobile currentBalance") // ADDED currentBalance
     .populate("createdBy", "name")
     .sort({ createdAt: -1 });
 

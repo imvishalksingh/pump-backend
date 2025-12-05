@@ -1012,8 +1012,8 @@ export const updateShift = asyncHandler(async (req, res) => {
       if (req.body[field] !== undefined) {
         console.log(`   Updating ${field}: ${shift[field]} → ${req.body[field]}`);
         
-        // Special handling for ObjectId fields
-        if (field.endsWith('Id') && req.body[field]) {
+        // Special handling for ObjectId fields (EXCEPT shiftId)
+        if (field.endsWith('Id') && field !== 'shiftId' && req.body[field]) {
           if (!mongoose.Types.ObjectId.isValid(req.body[field])) {
             console.log(`❌ Invalid ObjectId for ${field}: ${req.body[field]}`);
             return res.status(400).json({
@@ -1078,8 +1078,49 @@ export const updateShift = asyncHandler(async (req, res) => {
 
     console.log("✅ STEP 6 SUCCESS: Manual validation passed");
 
-    // STEP 7: Save the document
-    console.log("💾 STEP 7: Saving shift...");
+    // STEP 7: Clean invalid array records before saving
+    console.log("🧹 STEP 7: Cleaning invalid array records...");
+    
+    // Clean expense records (remove any that are missing required fields)
+    if (shift.expenseRecords && Array.isArray(shift.expenseRecords)) {
+      const originalExpenseCount = shift.expenseRecords.length;
+      shift.expenseRecords = shift.expenseRecords.filter(record => 
+        record && 
+        record.description && 
+        record.category && 
+        record.amount !== undefined
+      );
+      
+      if (shift.expenseRecords.length < originalExpenseCount) {
+        console.log(`✅ Removed ${originalExpenseCount - shift.expenseRecords.length} invalid expense records`);
+      }
+    }
+    
+    // Clean other record arrays
+    const recordArrays = ['cashSalesRecords', 'phonePeRecords', 'posRecords', 'fuelRecords', 'testingRecords'];
+    recordArrays.forEach(arrayName => {
+      if (shift[arrayName] && Array.isArray(shift[arrayName])) {
+        const originalLength = shift[arrayName].length;
+        shift[arrayName] = shift[arrayName].filter(record => {
+          // Basic validation - keep records that have at least an _id or valid data
+          if (!record) return false;
+          
+          // Check if record has any valid data
+          const hasValidData = Object.keys(record).some(key => 
+            key !== '_id' && record[key] !== undefined && record[key] !== null && record[key] !== ''
+          );
+          
+          return hasValidData;
+        });
+        
+        if (shift[arrayName].length < originalLength) {
+          console.log(`✅ Cleaned ${arrayName}: removed ${originalLength - shift[arrayName].length} invalid records`);
+        }
+      }
+    });
+
+    // STEP 8: Save the document
+    console.log("💾 STEP 8: Saving shift...");
     
     // Try manual save first to see exact error
     try {
@@ -1100,12 +1141,12 @@ export const updateShift = asyncHandler(async (req, res) => {
       console.log("❌ ValidateSync error:", validateError);
     }
 
-    // Now try to save
+    // Now try to save with validation
     const updatedShift = await shift.save();
-    console.log("✅ STEP 7 SUCCESS: Shift saved");
+    console.log("✅ STEP 8 SUCCESS: Shift saved");
 
-    // STEP 8: Populate and return
-    console.log("🔍 STEP 8: Populating data...");
+    // STEP 9: Populate and return
+    console.log("🔍 STEP 9: Populating data...");
     const populatedShift = await Shift.findById(updatedShift._id)
       .populate("nozzleman", "name employeeId")
       .populate("pump", "name location")
@@ -1337,24 +1378,14 @@ export const getYesterdayReadings = asyncHandler(async (req, res) => {
   res.json({ nozzleReadings });
 });
 
-// controllers/shiftController.js - UPDATED VERSION
-export const createManualShiftEntry = asyncHandler(async (req, res) => {
+export const createManualShiftEntry = async (req, res) => {
   try {
-    console.log("🔍 Manual Shift Entry Request");
-    console.log("User Role:", req.user?.role);
-    console.log("Request Body:", req.body);
-
     const {
       nozzlemanId,
-      pumpId,
-      nozzleId,
-      startReading,
-      endReading,
-      startTime,
-      endTime,
       date,
-      notes = "",
-      // Initial values
+      startTime,
+      notes,
+      isSimpleStart = false,
       cashCollected = 0,
       phonePeSales = 0,
       posSales = 0,
@@ -1365,175 +1396,179 @@ export const createManualShiftEntry = asyncHandler(async (req, res) => {
       expenses = 0,
       cashDeposit = 0,
       cashInHand = 0,
-      status = "Active", // Default to Active for admin-created shifts
-      meterReadingHSD = { opening: 0, closing: 0 },
-      meterReadingPetrol = { opening: 0, closing: 0 },
-      shiftId,
-      // NEW FLAG FOR SIMPLE SHIFT START
-      isSimpleStart = false // Add this flag
+      pumpId,
+      nozzleId
     } = req.body;
 
-    // VALIDATION - REQUIRED FIELDS
+    console.log("📥 Manual shift entry request:", req.body);
+    console.log("📅 Date received:", date);
+    console.log("⏰ Time received:", startTime);
+
+    // Validate required fields
     if (!nozzlemanId) {
       return res.status(400).json({
         success: false,
-        error: "Nozzleman ID is required"
+        message: "Nozzleman ID is required"
       });
     }
 
-    // For simple shift start, only date is required
-    let requiredDate = date;
-    if (!requiredDate && !isSimpleStart) {
+    if (!date) {
       return res.status(400).json({
         success: false,
-        error: "Date is required"
+        message: "Date is required"
       });
     }
 
-    // If no date provided for simple start, use today
-    if (!requiredDate && isSimpleStart) {
-      requiredDate = new Date().toISOString().split('T')[0];
+    if (!startTime) {
+      return res.status(400).json({
+        success: false,
+        message: "Start time is required"
+      });
     }
 
-    // Check if nozzleman exists
-    const nozzleman = await Nozzleman.findById(nozzlemanId);
+    // Find nozzleman with populated data
+    const nozzleman = await Nozzleman.findById(nozzlemanId)
+      .populate('assignedPump')
+      .populate('assignedNozzles');
+    
     if (!nozzleman) {
       return res.status(404).json({
         success: false,
-        error: "Nozzleman not found"
+        message: "Nozzleman not found"
       });
     }
 
-    // Check if nozzleman already has active shift
-    const activeShift = await Shift.findOne({
-      nozzleman: nozzlemanId,
-      status: { $in: ["Active", "Pending Approval"] }
-    });
-
-    if (activeShift) {
-      return res.status(400).json({
-        success: false,
-        error: `Nozzleman already has an active shift (${activeShift.shiftId})`,
-        activeShiftId: activeShift._id,
-        shiftId: activeShift.shiftId
-      });
-    }
-
-    // Generate shift ID if not provided
-    const finalShiftId = shiftId || `SH-${Date.now().toString().slice(-6)}`;
-
-    // Parse dates
-    let parsedStartTime, parsedEndTime;
-    
-    if (startTime && requiredDate) {
-      parsedStartTime = new Date(`${requiredDate}T${startTime}:00.000Z`);
-    } else if (requiredDate) {
-      parsedStartTime = new Date(`${requiredDate}T08:00:00.000Z`); // Default 8 AM
-    } else {
-      parsedStartTime = new Date();
-    }
-
-    if (endTime && requiredDate) {
-      parsedEndTime = new Date(`${requiredDate}T${endTime}:00.000Z`);
-    } else {
-      parsedEndTime = new Date(parsedStartTime);
-      parsedEndTime.setHours(parsedEndTime.getHours() + 8); // Default 8 hour shift
-    }
-
-    // FOR SIMPLE SHIFT START - Use nozzleman's assigned pump & nozzle
-    let finalPumpId = pumpId;
-    let finalNozzleId = nozzleId;
-    let finalStartReading = startReading;
-
-    if (isSimpleStart) {
-      // Try to get nozzleman's assigned pump and nozzle
-      if (nozzleman.assignedPump) {
-        finalPumpId = nozzleman.assignedPump;
-      }
+    // Parse date and time - FIXED VERSION
+    let startDateTime;
+    try {
+      // Format 1: Try with combined string
+      const dateTimeString = `${date}T${startTime}:00`;
+      console.log("🕒 Parsing datetime string:", dateTimeString);
       
-      if (nozzleman.assignedNozzle) {
-        finalNozzleId = nozzleman.assignedNozzle;
+      startDateTime = new Date(dateTimeString);
+      
+      // Check if date is valid
+      if (isNaN(startDateTime.getTime())) {
+        // Format 2: Try with time only (use current date)
+        const [hours, minutes] = startTime.split(':');
+        const today = new Date(date);
+        today.setHours(parseInt(hours || '0'), parseInt(minutes || '0'), 0, 0);
+        startDateTime = today;
         
-        // Get current reading from nozzle
-        const nozzle = await Nozzle.findById(finalNozzleId);
-        if (nozzle) {
-          finalStartReading = nozzle.currentReading || 0;
+        if (isNaN(startDateTime.getTime())) {
+          // Format 3: Create new date
+          startDateTime = new Date();
+          console.log("⚠️ Using current date as fallback");
         }
       }
+      
+      console.log("✅ Parsed datetime:", startDateTime.toISOString());
+    } catch (dateError) {
+      console.error("❌ Date parsing error:", dateError);
+      startDateTime = new Date(); // Fallback to current date/time
     }
 
-    // Create shift data
+    // Get assigned pump and nozzles
+    const assignedPump = nozzleman.assignedPump;
+    const assignedNozzles = nozzleman.assignedNozzles || [];
+
+    // For simple start, use first assigned nozzle if none provided
+    const selectedNozzleId = nozzleId || (assignedNozzles.length > 0 ? assignedNozzles[0]._id : null);
+    const selectedPumpId = pumpId || (assignedPump ? assignedPump._id : null);
+
+    if (!selectedNozzleId) {
+      return res.status(400).json({
+        success: false,
+        message: "No nozzle assigned to this nozzleman. Please assign a nozzle first."
+      });
+    }
+
+    // Find nozzle details
+    const nozzle = await Nozzle.findById(selectedNozzleId);
+    if (!nozzle) {
+      return res.status(404).json({
+        success: false,
+        message: "Nozzle not found"
+      });
+    }
+
+    // Get pump details
+    let pumpDetails = selectedPumpId;
+    if (!pumpDetails && nozzle.pump) {
+      pumpDetails = nozzle.pump;
+    }
+
+    if (!pumpDetails) {
+      // Try to find any pump
+      const anyPump = await Pump.findOne();
+      if (anyPump) {
+        pumpDetails = anyPump._id;
+        console.log("⚠️ Using fallback pump:", anyPump._id);
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Pump information is required. Please assign a pump to the nozzleman."
+        });
+      }
+    }
+
+    // Generate shift ID
+    const shiftId = `SHIFT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    // Create shift object
     const shiftData = {
-      shiftId: finalShiftId,
+      shiftId,
       nozzleman: nozzlemanId,
-      pump: finalPumpId,
-      nozzle: finalNozzleId,
-      startTime: parsedStartTime,
-      endTime: parsedEndTime,
-      startReading: parseFloat(finalStartReading) || 0,
-      endReading: parseFloat(endReading) || parseFloat(finalStartReading) || 0,
-      fuelDispensed: parseFloat(fuelDispensed) || 0,
-      testingFuel: parseFloat(testingFuel) || 0,
-      cashCollected: parseFloat(cashCollected) || 0,
-      phonePeSales: parseFloat(phonePeSales) || 0,
-      posSales: parseFloat(posSales) || 0,
-      otpSales: parseFloat(otpSales) || 0,
-      creditSales: parseFloat(creditSales) || 0,
-      expenses: parseFloat(expenses) || 0,
-      cashDeposit: parseFloat(cashDeposit) || 0,
-      cashInHand: parseFloat(cashInHand) || 0,
-      meterReadingHSD: meterReadingHSD,
-      meterReadingPetrol: meterReadingPetrol,
-      status: status,
-      notes: notes || `Shift started by ${req.user.name} for ${nozzleman.name}`,
+      pump: pumpDetails,
+      nozzle: selectedNozzleId,
+      startTime: startDateTime,
+      startReading: nozzle.currentReading || 0,
+      cashCollected,
+      phonePeSales,
+      posSales,
+      otpSales,
+      creditSales,
+      fuelDispensed,
+      testingFuel,
+      expenses,
+      cashDeposit,
+      cashInHand,
+      status: "Active",
+      notes: notes || `Manual shift entry for ${nozzleman.name}`,
       isManualEntry: true,
-      createdBy: req.user._id
+      isSimpleStart: isSimpleStart,
+      createdBy: req.user.id,
+      meterReadingHSD: {
+        opening: 0,
+        closing: 0
+      },
+      meterReadingPetrol: {
+        opening: 0,
+        closing: 0
+      }
     };
 
-    // Remove null/undefined fields
-    Object.keys(shiftData).forEach(key => {
-      if (shiftData[key] === null || shiftData[key] === undefined) {
-        delete shiftData[key];
-      }
-    });
-
-    console.log("📋 Creating shift with data:", shiftData);
+    console.log("📝 Creating shift with data:", shiftData);
 
     const shift = await Shift.create(shiftData);
 
-    // Update nozzle current reading if available
-    if (finalNozzleId) {
-      await Nozzle.findByIdAndUpdate(finalNozzleId, {
-        currentReading: parseFloat(finalStartReading) || 0
-      });
-    }
-
-    // Update nozzleman stats
+    // Update nozzleman's shift count
     await Nozzleman.findByIdAndUpdate(nozzlemanId, {
       $inc: { totalShifts: 1 }
     });
 
-    // Populate response
-    const populatedShift = await Shift.findById(shift._id)
-      .populate("nozzleman", "name employeeId mobile")
-      .populate("pump", "name location")
-      .populate("nozzle", "number fuelType")
-      .populate("createdBy", "name email");
-
     res.status(201).json({
       success: true,
-      message: isSimpleStart ? "Shift started successfully" : "Manual entry created successfully",
-      shift: populatedShift,
-      isSimpleStart: isSimpleStart
+      message: "Shift created successfully",
+      data: shift
     });
 
   } catch (error) {
-    console.error("❌ Error in createManualShiftEntry:", error);
+    console.error("❌ Error creating manual shift:", error);
     res.status(500).json({
       success: false,
-      error: "Failed to create entry",
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: error.message || "Failed to create shift",
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
-});
-
+};

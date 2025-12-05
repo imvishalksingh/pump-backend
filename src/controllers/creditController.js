@@ -56,7 +56,7 @@ export const createCustomer = asyncHandler(async (req, res) => {
     creditLimit,
     address,
     status: status || "Active",
-    balance: 0,
+    currentBalance: 0, // CHANGED from balance to currentBalance
     createdBy: req.user._id,
   });
 
@@ -104,7 +104,7 @@ export const deleteCustomer = asyncHandler(async (req, res) => {
   }
 
   // Check if customer has outstanding balance
-  if (customer.balance > 0) {
+  if (customer.currentBalance > 0) { // CHANGED from balance to currentBalance
     res.status(400);
     throw new Error("Cannot delete customer with outstanding balance");
   }
@@ -140,16 +140,17 @@ export const recordPayment = asyncHandler(async (req, res) => {
 
   console.log("🟡 Customer found:", { 
     name: customer.name, 
-    currentBalance: customer.balance 
+    currentBalance: customer.currentBalance // CHANGED from balance to currentBalance
   });
 
   // Update customer balance (ALLOW NEGATIVE VALUES FOR ADVANCE PAYMENTS)
-  const oldBalance = customer.balance;
-  customer.balance = oldBalance - amount;
+  const oldBalance = customer.currentBalance; // CHANGED from balance to currentBalance
+  customer.currentBalance = oldBalance - amount; // CHANGED from balance to currentBalance
+  customer.lastPaymentDate = new Date();
   
   console.log("🟡 Balance update:", { 
     oldBalance, 
-    newBalance: customer.balance 
+    newBalance: customer.currentBalance // CHANGED from balance to currentBalance
   });
 
   await customer.save();
@@ -157,13 +158,13 @@ export const recordPayment = asyncHandler(async (req, res) => {
   // Create ledger entry
   const ledgerEntry = await Ledger.create({
     customer: customer._id,
-    type: "Payment",
+    transactionType: "Payment", // CHANGED from type to transactionType
     amount: amount,
-    balance: customer.balance,
+    balanceAfter: customer.currentBalance, // CHANGED from balance to currentBalance
     description: notes || `Payment received from ${customer.name}`,
-    reference: `PAY-${Date.now()}`,
+    referenceNumber: `PAY-${Date.now()}`, // CHANGED from reference to referenceNumber
     createdBy: req.user._id,
-    date: paymentDate ? new Date(paymentDate) : new Date()
+    transactionDate: paymentDate ? new Date(paymentDate) : new Date() // CHANGED from date to transactionDate
   });
 
   console.log("🟡 Ledger entry created:", ledgerEntry);
@@ -174,7 +175,7 @@ export const recordPayment = asyncHandler(async (req, res) => {
     customer,
     ledgerEntry,
     oldBalance,
-    newBalance: customer.balance
+    newBalance: customer.currentBalance // CHANGED from balance to currentBalance
   });
 });
 
@@ -197,23 +198,23 @@ export const syncCreditSale = asyncHandler(async (req, res) => {
     throw new Error("Customer not found");
   }
 
-  // Check credit limit
-  const newBalance = (customer.balance || 0) + Number(amount);
+  // Check credit limit - USE currentBalance
+  const newBalance = (customer.currentBalance || 0) + Number(amount); // CHANGED from balance to currentBalance
   if (newBalance > customer.creditLimit) {
     res.status(400);
-    throw new Error(`Credit limit exceeded. Current balance: ${customer.balance}, Limit: ${customer.creditLimit}`);
+    throw new Error(`Credit limit exceeded. Current balance: ${customer.currentBalance}, Limit: ${customer.creditLimit}`); // CHANGED from balance to currentBalance
   }
 
   // 1. Update Customer Balance (Increase balance for sales)
-  const oldBalance = customer.balance;
-  customer.balance = newBalance;
+  const oldBalance = customer.currentBalance; // CHANGED from balance to currentBalance
+  customer.currentBalance = newBalance; // CHANGED from balance to currentBalance
   customer.lastTransactionDate = new Date();
   await customer.save();
 
   console.log("🟡 Customer balance updated:", { 
     customer: customer.name, 
     oldBalance, 
-    newBalance: customer.balance 
+    newBalance: customer.currentBalance // CHANGED from balance to currentBalance
   });
 
   // 2. Create Ledger Entry
@@ -223,7 +224,7 @@ export const syncCreditSale = asyncHandler(async (req, res) => {
     transactionType: "Sale",
     amount: Number(amount),
     totalAmount: Number(amount),
-    balanceAfter: customer.balance,
+    balanceAfter: customer.currentBalance, // CHANGED from balance to currentBalance
     description: notes || `Credit sale recorded from shift`,
     vehicleNumber: vehicleNumber || "",
     transactionDate: date ? new Date(date) : new Date(),
@@ -240,11 +241,11 @@ export const syncCreditSale = asyncHandler(async (req, res) => {
     customer: {
       _id: customer._id,
       name: customer.name,
-      balance: customer.balance,
+      currentBalance: customer.currentBalance, // CHANGED from balance to currentBalance
       creditLimit: customer.creditLimit
     },
     ledgerEntry,
     oldBalance,
-    newBalance: customer.balance
+    newBalance: customer.currentBalance // CHANGED from balance to currentBalance
   });
 });
